@@ -5,10 +5,12 @@ import { Download, ListTree, PanelLeft, PanelRight, Plus, Trash2, X } from '@vbe
 import { ElButton, ElMessage } from 'element-plus';
 import { marked } from 'marked';
 import AiChatPanel from '#/components/rag/AiChatPanel.vue';
+import KbFileSelector from '#/components/rag/KbFileSelector.vue';
 import { RichTextEditor } from '#/components/zq-form/rich-text-editor';
 import SelectionTooltip from '#/components/rag/SelectionTooltip.vue';
 import { useAiWriter } from '#/composables/useAiWriter';
-import { aiEditStream } from '#/api/core/rag';
+import { aiEditStream, getKnowledgeBaseListApi } from '#/api/core/rag';
+import type { KnowledgeBase } from '#/api/core/rag';
 
 defineOptions({ name: 'AiWriterPage' });
 
@@ -33,6 +35,9 @@ const {
   saveDocumentContent,
   formatTime,
   truncateTitle,
+  kbIds,
+  selectedKbLabel,
+  setKbIds,
 } = useAiWriter();
 
 const sidebarCollapsed = ref(false);
@@ -42,6 +47,28 @@ const currentDocId = ref<string | null>(null);
 const showToc = ref(false);
 const editing = ref(false);
 const tiptapEditor = ref<any>(null);
+
+// ─── 知识库选择 ───
+const showKbSelector = ref(false);
+const kbs = ref<KnowledgeBase[]>([]);
+
+async function loadKbs() {
+  try {
+    const res = await getKnowledgeBaseListApi({ page: 1, pageSize: 200 });
+    kbs.value = res.items;
+  } catch {
+    kbs.value = [];
+  }
+}
+
+function handleKbSelect(kbId: string, _fileId: string) {
+  setKbIds(kbIds.value.includes(kbId) ? kbIds.value : [...kbIds.value, kbId]);
+  showKbSelector.value = false;
+}
+
+onMounted(() => {
+  loadKbs();
+});
 
 // --- Auto-save ---
 const saveStatus = ref<'idle' | 'unsaved' | 'saving' | 'saved'>('idle');
@@ -410,12 +437,15 @@ function exportToWord() {
             :streaming="streaming"
             :editing-msg-id="editingMsgId"
             :documents-by-msg-id="documentsByMsgId"
+            :kb-ids="kbIds"
+            :selected-kb-label="selectedKbLabel"
             @send="send"
             @convert="handleConvert"
             @edit-message="handleEditMessage"
             @ai-edit-message="handleAiEditMessage"
             @open-document="handleOpenDocument"
             @delete-document="handleDeleteDocument"
+            @open-kb-selector="showKbSelector = true"
           />
         </div>
 
@@ -509,6 +539,13 @@ function exportToWord() {
         </div>
       </div>
     </div>
+    <KbFileSelector
+      v-model="showKbSelector"
+      :kbs="kbs"
+      :selected-kb-id="kbIds[0] || ''"
+      :selected-file-id="''"
+      @select="handleKbSelect"
+    />
   </Page>
 </template>
 

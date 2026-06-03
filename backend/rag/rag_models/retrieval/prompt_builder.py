@@ -1,0 +1,111 @@
+"""提示词构建与答案生成
+
+功能：
+- 根据数据集类型构建不同风格的 LLM 提示词
+- 支持同步与流式答案生成
+"""
+
+from typing import Any, AsyncGenerator
+
+from rag.utils import call_llm_api
+from loguru import logger
+
+
+def build_prompt(
+    config: Any,
+    dataset: str,
+    question: str,
+    sub_questions: list,
+    context: str,
+) -> str:
+    """根据 dataset 类型选择对应的提示词模板
+
+    优先使用 config 中配置的 prompt template，
+    无 config 时使用硬编码默认模板（novel / novel_eng / general）
+    """
+    if config is not None:
+        if dataset == "novel":
+            return config.get_prompt_formatted(
+                "retrieval",
+                "novel_chs",
+                question=question,
+                context=context,
+            )
+        elif dataset == "novel_eng":
+            return config.get_prompt_formatted(
+                "retrieval",
+                "novel_eng",
+                question=question,
+                context=context,
+            )
+        else:
+            return config.get_prompt_formatted(
+                "retrieval",
+                "general",
+                question=question,
+                context=context,
+            )
+
+    if dataset == "novel":
+        return f"""
+        你是小说知识助手，你的任务是根据提供的小说知识库回答问题。
+        1. 如果知识库中的信息不足以回答问题，请根据你的推理和知识回答。
+        2. 回答要简洁明了。
+        3. 对于事实性问题，提供具体的事实或人物名称。
+        4. 对于时间性问题，提供具体的时间、年份或时间段。
+        问题：{question}
+        相关知识：{context}
+        答案（简洁明了）：
+        """
+    elif dataset == "novel_eng":
+        return f"""
+        You are a novel knowledge assistant. Your task is to answer the question based on the provided novel knowledge context.
+        1. If the knowledge is insufficient, answer the question based on your own knowledge.
+        2. Be precise and concise in your answer.
+        3. For factual questions, provide the specific fact or entity name
+        4. For temporal questions, provide the specific date, year, or time period
+
+        Question: {question}
+
+        The question is broken down into sub-question to help thinking:{sub_questions}
+
+        Knowledge Context:
+        {context}
+
+        Answer (be specific and direct):
+        """
+    else:
+        return f"""
+        You are an expert knowledge assistant. Your task is to answer the question based on the provided knowledge context.
+
+        1. Use ONLY the information from the provided knowledge context and try your best to answer the question.
+        2. If the knowledge is insufficient, reject to answer the question.
+        3. Be precise and concise in your answer
+        4. For factual questions, provide the specific fact or entity name
+        5. For temporal questions, provide the specific date, year, or time period
+
+        The question is broken down into sub-question to help thinking:{sub_questions}
+
+        Question: {question}
+
+        Knowledge Context:
+        {context}
+
+        Answer (be specific and direct):
+        """
+
+
+def generate_answer(llm_client: call_llm_api.LLMCompletionCall, prompt: str) -> str:
+    """同步生成答案"""
+    answer = llm_client.call_api(prompt)
+    logger.info(f"Answer: {answer}")
+    return answer
+
+
+async def generate_answer_stream(
+    llm_stream_client: call_llm_api.LLMCompletionCallStream,
+    prompt: str,
+) -> AsyncGenerator[str, None]:
+    """流式生成答案（用于 SSE 场景）"""
+    async for token in llm_stream_client.call_api_stream(prompt):
+        yield token

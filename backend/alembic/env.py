@@ -19,21 +19,23 @@ def auto_import_models():
     扫描项目根目录下所有以model结尾的py文件（如model.py、screen_model.py、material_model.py）
     """
     project_root = Path(__file__).parent.parent
-    
+
     # 需要扫描的目录（可以添加更多）
-    scan_dirs = ["core", "scheduler", "online_dev", "rag"]
-    
+    scan_dirs = ["core", "scheduler", "online_dev", "rag", "chronicle_writer"]
+
     for scan_dir in scan_dirs:
         scan_path = project_root / scan_dir
         if not scan_path.exists():
             continue
-        
+
         # 递归查找所有以model结尾的py文件（如model.py、screen_model.py、material_model.py）
         for model_file in scan_path.rglob("*model.py"):
             # 计算模块路径，如 zq_demo.demo.model 或 core.screen_design.screen_model
             relative_path = model_file.relative_to(project_root)
-            module_path = str(relative_path.with_suffix("")).replace("/", ".").replace("\\", ".")
-            
+            module_path = (
+                str(relative_path.with_suffix("")).replace("/", ".").replace("\\", ".")
+            )
+
             try:
                 importlib.import_module(module_path)
             except ImportError as e:

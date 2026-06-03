@@ -1,6 +1,7 @@
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import {
   aiWritingStream,
+  chronicleChatStream,
   aiEditStream,
   aiEditMessageStream,
   createWriterConversationApi,
@@ -38,6 +39,16 @@ export function useAiWriter() {
   const editingMsgId = ref<string | null>(null);
   const documentsByMsgId = ref<Record<string, WriterDocument[]>>({});
   const messagesVersion = ref(0);
+
+  // ─── 知识库检索范围 ───
+  const kbIds = ref<string[]>([]);
+  const selectedKbLabel = computed(() =>
+    kbIds.value.length > 0 ? `知识库(${kbIds.value.length}个)` : '',
+  );
+
+  function setKbIds(ids: string[]) {
+    kbIds.value = ids;
+  }
 
   async function fetchConversations(page = 1, pageSize = 50) {
     loading.value = true;
@@ -168,8 +179,9 @@ export function useAiWriter() {
 
   async function send(question: string) {
     let convId = currentConvId.value;
+    const isChronicle = kbIds.value.length > 0;
 
-    if (!convId) {
+    if (!convId && !isChronicle) {
       convId = await createConversation(question.slice(0, 20) + '...');
       currentConvId.value = convId;
     }
@@ -193,34 +205,51 @@ export function useAiWriter() {
 
     const getMsg = () => messages.value[assistantIdx] as AiMessage;
 
-    // build history from previous messages (exclude the two we just pushed)
-    const history = messages.value
-      .slice(0, -2)
-      .map((m) => ({ role: m.role, content: m.content }));
-
     try {
-      await aiWritingStream(question, convId, history, {
-        onToken: (token) => {
-          getMsg().content += token;
-        },
-        onDone: (fullText, returnedConvId, messageId) => {
-          const msg = getMsg();
-          msg.content = fullText || msg.content;
-          msg.streaming = false;
-          if (messageId) {
-            msg.id = messageId;
-          }
-          if (returnedConvId) {
-            currentConvId.value = returnedConvId;
-          }
-          fetchConversations();
-        },
-        onError: (err) => {
-          const msg = getMsg();
-          msg.content = `错误: ${err.message}`;
-          msg.streaming = false;
-        },
-      });
+      if (isChronicle) {
+        // ── 志书写作模式 ──
+        await chronicleChatStream({
+          conversation_id: convId || undefined,
+          question,
+          kb_ids: kbIds.value,
+        }, {
+          onToken: (token) => { getMsg().content += token; },
+          onDone: (fullText, returnedConvId) => {
+            const msg = getMsg();
+            msg.content = fullText || msg.content;
+            msg.streaming = false;
+            if (returnedConvId) currentConvId.value = returnedConvId;
+            fetchConversations();
+          },
+          onError: (err) => {
+            const msg = getMsg();
+            msg.content = `错误: ${err.message}`;
+            msg.streaming = false;
+          },
+        });
+      } else {
+        // ── 原有 AI Writer 模式 ──
+        const history = messages.value
+          .slice(0, -2)
+          .map((m) => ({ role: m.role, content: m.content }));
+
+        await aiWritingStream(question, convId, history, {
+          onToken: (token) => { getMsg().content += token; },
+          onDone: (fullText, returnedConvId, messageId) => {
+            const msg = getMsg();
+            msg.content = fullText || msg.content;
+            msg.streaming = false;
+            if (messageId) msg.id = messageId;
+            if (returnedConvId) currentConvId.value = returnedConvId;
+            fetchConversations();
+          },
+          onError: (err) => {
+            const msg = getMsg();
+            msg.content = `错误: ${err.message}`;
+            msg.streaming = false;
+          },
+        });
+      }
     } catch (err: any) {
       const msg = getMsg();
       msg.content = `请求失败: ${err.message}`;
@@ -360,5 +389,8 @@ export function useAiWriter() {
     saveDocumentContent,
     formatTime,
     truncateTitle,
+    kbIds,
+    selectedKbLabel,
+    setKbIds,
   };
 }

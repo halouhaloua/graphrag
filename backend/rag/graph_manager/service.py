@@ -26,13 +26,13 @@ path = pathlib.Path(__file__).parent.parent
 
 try:
     from rag.rag_models.constructor import kt_gen as constructor
-    from rag.rag_models.retriever import agentic_decomposer as decomposer
-    from rag.rag_models.retriever.retrieval_core import (
+    from rag.rag_models.retrieval import agentic_decomposer as decomposer
+    from rag.rag_models.retrieval.retrieval_core import (
         init_retrieval_state,
         build_retrieval_indices,
         process_retrieval_results,
     )
-    from rag.rag_models.retriever.prompt_builder import (
+    from rag.rag_models.retrieval.prompt_builder import (
         build_prompt,
         generate_answer_stream,
     )

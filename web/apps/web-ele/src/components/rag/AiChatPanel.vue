@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 import { ref, watch, nextTick } from 'vue';
 import { ElButton, ElInput } from 'element-plus';
+import { Collection } from '@vben/icons';
 import ChatMessageItem from '#/components/rag/ChatMessageItem.vue';
 import type { WriterDocument } from '#/api/core/rag';
 
@@ -11,6 +12,8 @@ const props = defineProps<{
   editingMsgId?: string | null;
   documentsByMsgId?: Record<string, WriterDocument[]>;
   messagesVersion?: number;
+  kbIds?: string[];
+  selectedKbLabel?: string;
 }>();
 
 const emit = defineEmits<{
@@ -18,6 +21,7 @@ const emit = defineEmits<{
   convert: [content: string, msgId: string];
   openDocument: [doc: WriterDocument];
   deleteDocument: [docId: string];
+  openKbSelector: [];
 }>();
 
 const inputText = ref('');
@@ -96,6 +100,16 @@ watch(
           resize="none"
           @keydown="onKeydown"
         />
+        <div class="input-footer">
+          <ElButton
+            size="small"
+            :type="(kbIds?.length ?? 0) > 0 ? 'primary' : 'default'"
+            @click="emit('openKbSelector')"
+          >
+            <template #icon><Collection /></template>
+            {{ selectedKbLabel || '选择知识库' }}
+          </ElButton>
+        </div>
         <ElButton
           class="send-btn"
           type="primary"
@@ -195,6 +209,12 @@ watch(
 .input-shell :deep(.el-textarea__inner) {
   padding-right: 44px;
   border-radius: 12px;
+}
+
+.input-footer {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0 0;
 }
 
 .send-btn {

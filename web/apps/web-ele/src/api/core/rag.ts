@@ -820,6 +820,55 @@ export async function aiWritingStream(
   );
 }
 
+// ─── Chronicle Writer ───
+
+export interface ChronicleInterruptDecision {
+  action: 'retry' | 'override' | 'skip';
+  override_data?: Record<string, any>;
+}
+
+export interface ChronicleChatRequest {
+  conversation_id?: string;
+  question: string;
+  kb_ids: string[];
+  project_config?: Record<string, any>;
+  interrupt_decision?: ChronicleInterruptDecision;
+}
+
+export async function chronicleChatStream(
+  data: ChronicleChatRequest,
+  callbacks?: {
+    onToken?: (token: string) => void;
+    onStatus?: (stage: string, progress: number, message: string) => void;
+    onInterrupt?: (data: any) => void;
+    onDone?: (fullText: string, convId?: string) => void;
+    onError?: (error: Error) => void;
+  },
+) {
+  return streamRequestClient('/api/chronicle/chat', data, {
+    onData: (event: any) => {
+      switch (event.type) {
+        case 'token':
+          callbacks?.onToken?.(event.text ?? '');
+          break;
+        case 'status':
+          callbacks?.onStatus?.(event.stage, event.progress, event.message);
+          break;
+        case 'interrupt':
+          callbacks?.onInterrupt?.(event);
+          break;
+        case 'done':
+          callbacks?.onDone?.(event.content ?? '', event.conversation_id);
+          break;
+        case 'error':
+          callbacks?.onError?.(new Error(event.message));
+          break;
+      }
+    },
+    onError: (err) => callbacks?.onError?.(err),
+  });
+}
+
 export async function aiEditStream(
   content: string,
   instruction: 'polish' | 'rewrite' | 'custom',
