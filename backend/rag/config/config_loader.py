@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import torch
+
 from rag.config.prompts import prompts
 from loguru import logger
 
@@ -24,6 +26,11 @@ def _get_embedding_model():
     default_path = str(Path(__file__).parent.parent.parent.parent / "bge-small-zh-v1.5")
     model_path = os.environ.get("RAG_EMBEDDING_MODEL_PATH", default_path)
     _embedding_model_instance = SentenceTransformer(model_path)
+    if torch.cuda.is_available():
+        _embedding_model_instance = _embedding_model_instance.to("cuda")
+        logger.info("Embedding model moved to GPU")
+    else:
+        logger.info("Embedding model running on CPU")
     return _embedding_model_instance
 
 
@@ -105,8 +112,6 @@ class RetrievalConfig:
 
 @dataclass
 class EmbeddingsConfig:
-    device: str = "cuda"
-
     def get_model(self):
         return _get_embedding_model()
 

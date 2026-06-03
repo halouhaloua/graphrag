@@ -201,8 +201,9 @@ def build_retrieval_indices(state: RetrievalState):
 
 
 def _get_query_embedding(state: RetrievalState, query: str) -> torch.Tensor:
-    """对查询文本编码为向量"""
-    return torch.tensor(state.encoder.encode(query)).float()
+    """对查询文本编码为向量，自动跟随编码器所在设备"""
+    embed = state.encoder.encode(query, convert_to_tensor=True)
+    return embed.float()
 
 
 def _chunk_retrieval_fn(state: RetrievalState):

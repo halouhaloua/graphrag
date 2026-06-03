@@ -1,7 +1,6 @@
 <script lang="ts" setup>
 import { ref, watch, nextTick } from 'vue';
 import { ElButton, ElInput } from 'element-plus';
-import { Collection } from '@vben/icons';
 import ChatMessageItem from '#/components/rag/ChatMessageItem.vue';
 import type { WriterDocument } from '#/api/core/rag';
 
@@ -91,37 +90,32 @@ watch(
 
     <div class="input-area">
       <div class="input-shell">
-        <ElInput
+        <el-input
           v-model="inputText"
-          :placeholder="placeholder || '输入写作提示，按 Enter 发送，Shift+Enter 换行'"
+          :placeholder="placeholder || '输入写作提示，Enter 发送，Shift+Enter 换行'"
           :disabled="streaming"
           type="textarea"
-          :rows="5"
+          :rows="3"
           resize="none"
           @keydown="onKeydown"
         />
         <div class="input-footer">
-          <ElButton
-            size="small"
-            :type="(kbIds?.length ?? 0) > 0 ? 'primary' : 'default'"
-            @click="emit('openKbSelector')"
+          <div class="footer-actions">
+            <el-button class="selector-button" @click="emit('openKbSelector')">
+              <span class="selector-button-label">{{ selectedKbLabel || '选择知识库' }}</span>
+            </el-button>
+          </div>
+          <el-button
+            class="send-button"
+            :disabled="!inputText.trim() || streaming"
+            @click="handleSend"
           >
-            <template #icon><Collection /></template>
-            {{ selectedKbLabel || '选择知识库' }}
-          </ElButton>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 2 11 13" />
+              <path d="M22 2 15 22 11 13 2 9 22 2z" />
+            </svg>
+          </el-button>
         </div>
-        <ElButton
-          class="send-btn"
-          type="primary"
-          circle
-          :disabled="!inputText.trim() || streaming"
-          @click="handleSend"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M22 2 11 13" />
-            <path d="M22 2 15 22 11 13 2 9 22 2z" />
-          </svg>
-        </ElButton>
       </div>
     </div>
   </div>
@@ -185,42 +179,70 @@ watch(
 .input-area {
   display: flex;
   justify-content: center;
-  padding: 12px 16px;
-}
-
-.messages-container {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 24px 0;
-}
-
-.messages-shell {
-  width: min(800px, 90%);
+  padding: 8px 0;
+  background: var(--el-bg-color-overlay);
 }
 
 .input-shell {
-  position: relative;
   width: min(800px, 90%);
+  padding: 8px;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 16px;
+  box-shadow: 0 10px 24px rgb(15 23 42 / 6%);
 }
 
 .input-shell :deep(.el-textarea__inner) {
-  padding-right: 44px;
-  border-radius: 12px;
+  min-height: 48px !important;
+  max-height: 120px;
+  padding: 2px 4px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.input-shell :deep(.el-textarea__inner:focus) {
+  box-shadow: none;
 }
 
 .input-footer {
   display: flex;
-  gap: 8px;
-  padding: 6px 0 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
 }
 
-.send-btn {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  z-index: 1;
+.footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.selector-button,
+.send-button {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  background: var(--el-fill-color-light);
+  border-color: transparent;
+  border-radius: 999px;
+}
+
+.selector-button-label {
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+
+.send-button {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
 }
 </style>

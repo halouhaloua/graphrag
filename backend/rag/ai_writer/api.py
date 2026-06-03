@@ -242,7 +242,7 @@ async def ai_edit_message(
             msg = await WriterMessageService.get_by_id(sess, message_id)
             if msg:
                 msg.content = full_content
-                await sess.flush()
+                await sess.commit()
 
         yield _sse_event({"type": "done", "answer": full_content})
         yield "data: [DONE]\n\n"
@@ -315,7 +315,7 @@ async def ai_chat(
                 msg = await WriterMessageService.get_by_id(sess, msg_id)
                 if msg:
                     msg.content = f"[Error] {e}"
-                    await sess.flush()
+                    await sess.commit()
             yield _sse_event({"type": "error", "message": str(e)})
             yield "data: [DONE]\n\n"
             return
@@ -325,7 +325,7 @@ async def ai_chat(
             msg = await WriterMessageService.get_by_id(sess, msg_id)
             if msg:
                 msg.content = full_content
-                await sess.flush()
+                await sess.commit()
 
         yield _sse_event(
             {
