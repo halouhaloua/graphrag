@@ -4,6 +4,8 @@ RAG文件管理服务
 import hashlib
 import mimetypes
 import os
+
+from loguru import logger
 from datetime import datetime
 from typing import List, Optional, Tuple
 
@@ -418,7 +420,8 @@ class RagFileManagerService:
             text = cls._sanitize_text(await common_ocr(full_path, item.file_ext or ''))
             item.text_content = text
             item.ocr_status = 'completed'
-        except Exception:
+        except Exception as e:
+            logger.exception(f"传统 OCR 失败 (file_id={file_id}): {e}")
             item.ocr_status = 'failed'
 
         await db.commit()
@@ -442,7 +445,8 @@ class RagFileManagerService:
             text = cls._sanitize_text(await complex_ocr(full_path, item.file_ext or ''))
             item.text_content = text
             item.llm_status = 'completed'
-        except Exception:
+        except Exception as e:
+            logger.exception(f"复杂竖排 OCR 失败 (file_id={file_id}): {e}")
             item.llm_status = 'failed'
 
         await db.commit()

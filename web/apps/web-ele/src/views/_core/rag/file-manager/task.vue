@@ -1,18 +1,18 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute } from 'vue-router';
 import { Page } from '@vben/common-ui';
-import { ElMessage, ElSkeleton } from 'element-plus';
+import { ElMessage, ElMessageBox, ElSkeleton } from 'element-plus';
 import { useAccessStore } from '@vben/stores';
 
 import { RichTextEditor } from '#/components/zq-form/rich-text-editor';
-import { usePdfSearch } from '#/composables/usePdfSearch';
 
 import SidebarNav from './components/SidebarNav.vue';
 import FilePreviewArea from './components/FilePreviewArea.vue';
 import KbSelectTable from './components/KbSelectTable.vue';
 
 import {
+  estimateComplexOcr,
   getFileStreamUrl,
   getFileText,
   addFileToKb,
@@ -49,12 +49,6 @@ const kbPageSize = ref(10);
 const kbTotal = ref(0);
 const loadingKb = ref(false);
 
-const isPdf = computed(() => fileExt.value === 'pdf');
-
-const pdfPage = ref(1);
-const searchVisible = ref(false);
-const searchQuery = ref('');
-const pdfSearch = usePdfSearch();
 const accessToken = String(useAccessStore().accessToken);
 
 onMounted(async () => {
@@ -64,7 +58,6 @@ onMounted(async () => {
     const file: any = await getRagFileInfo(fileId.value);
     fileName.value = file.name || '';
     fileExt.value = (file.fileExt || '').toLowerCase().replace('.', '');
-    streamUrl.value = getFileStreamUrl(fileId.value, accessToken);
   } catch {
     fileName.value = '';
   }
@@ -78,17 +71,9 @@ onMounted(async () => {
     textContent.value = '';
   }
 
-  await fetchKbList();
+  streamUrl.value = getFileStreamUrl(fileId.value, accessToken);
 
-  if (isPdf.value) {
-    await pdfSearch.loadPdf(streamUrl.value);
-    if (pdfSearch.error.value) {
-      console.warn('[PDF Search] 文本提取失败:', pdfSearch.error.value);
-    }
-    if (!pdfSearch.allText.value.length && !pdfSearch.error.value) {
-      console.warn('[PDF Search] PDF文本内容为空（可能是扫描件/图片型PDF，请使用OCR识别）');
-    }
-  }
+  await fetchKbList();
 
   loading.value = false;
 });
@@ -110,18 +95,6 @@ function handleKeydown(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') {
     e.preventDefault();
     handleSave();
-    return;
-  }
-  if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-    e.preventDefault();
-    searchVisible.value = !searchVisible.value;
-    if (searchVisible.value) nextTick(() => {}); // focus handled by PdfSearchPanel
-  }
-  if ((e.ctrlKey || e.metaKey) && e.key === 'g') {
-    if (!searchVisible.value) return;
-    e.preventDefault();
-    const page = e.shiftKey ? pdfSearch.prevMatch() : pdfSearch.nextMatch();
-    if (page) pdfPage.value = page;
   }
 }
 
@@ -168,45 +141,6 @@ function handleKbSizeChange(size: number) {
   fetchKbList();
 }
 
-function toggleSearch() {
-  if (searchVisible.value) {
-    closeSearch();
-  } else {
-    searchVisible.value = true;
-  }
-}
-
-function onSearch(val: string) {
-  searchQuery.value = val;
-  if (!pdfSearch.matches.value.length && !val) return;
-  pdfSearch.search(val);
-  if (pdfSearch.matches.value.length) {
-    const page = pdfSearch.goToMatch(0);
-    if (page) pdfPage.value = page;
-  }
-}
-
-function goToSearchMatch(index: number) {
-  const page = pdfSearch.goToMatch(index);
-  if (page) pdfPage.value = page;
-}
-
-function prevSearchMatch() {
-  const page = pdfSearch.prevMatch();
-  if (page) pdfPage.value = page;
-}
-
-function nextSearchMatch() {
-  const page = pdfSearch.nextMatch();
-  if (page) pdfPage.value = page;
-}
-
-function closeSearch() {
-  searchVisible.value = false;
-  searchQuery.value = '';
-  pdfSearch.search('');
-}
-
 async function handleOcr() {
   try {
     await triggerOcr(fileId.value);
@@ -221,6 +155,20 @@ async function handleOcr() {
 }
 
 async function handleComplexOcr() {
+  try {
+    const est: any = await estimateComplexOcr(fileId.value);
+    try {
+      await ElMessageBox.confirm(
+        `PDF 共 ${est.totalPages} 页，当前使用 ${est.device}，预计需约 ${est.estimatedMinutes} 分钟。\n\n是否继续识别？`,
+        '确认识别',
+        { confirmButtonText: '开始识别', cancelButtonText: '取消', type: 'info' },
+      )
+    } catch {
+      return
+    }
+  } catch {
+    // 预估失败，直接执行
+  }
   try {
     await triggerComplexOcr(fileId.value);
     const textRes: any = await getFileText(fileId.value);
@@ -252,27 +200,11 @@ async function handleComplexOcr() {
             v-if="activeNav === 'preview'"
             :file-ext="fileExt"
             :stream-url="streamUrl"
-            :pdf-page="pdfPage"
-            :sidebar-collapsed="sidebarCollapsed"
             :ocr-status="ocrStatus"
             :llm-status="llmStatus"
             :card="true"
-            :search-visible="searchVisible"
-            :search-query="searchQuery"
-            :search-matches="pdfSearch.matches.value"
-            :search-match-index="pdfSearch.matchIndex.value"
-            :search-total="pdfSearch.totalMatches.value"
-            @update:pdf-page="pdfPage = $event"
-            @toggle-sidebar="sidebarCollapsed = false"
-            @toggle-search="toggleSearch"
             @ocr="handleOcr"
             @complex-ocr="handleComplexOcr"
-            @update:search-query="searchQuery = $event"
-            @search="onSearch"
-            @search-prev="prevSearchMatch"
-            @search-next="nextSearchMatch"
-            @search-close="closeSearch"
-            @go-to-search-match="goToSearchMatch"
           />
 
           <template v-if="activeNav === 'edit'">
@@ -292,27 +224,11 @@ async function handleComplexOcr() {
             <FilePreviewArea
               :file-ext="fileExt"
               :stream-url="streamUrl"
-              :pdf-page="pdfPage"
-              :sidebar-collapsed="sidebarCollapsed"
               :ocr-status="ocrStatus"
               :llm-status="llmStatus"
               :card="false"
-              :search-visible="searchVisible"
-              :search-query="searchQuery"
-              :search-matches="pdfSearch.matches.value"
-              :search-match-index="pdfSearch.matchIndex.value"
-              :search-total="pdfSearch.totalMatches.value"
-              @update:pdf-page="pdfPage = $event"
-              @toggle-sidebar="sidebarCollapsed = false"
-              @toggle-search="toggleSearch"
               @ocr="handleOcr"
               @complex-ocr="handleComplexOcr"
-              @update:search-query="searchQuery = $event"
-              @search="onSearch"
-              @search-prev="prevSearchMatch"
-              @search-next="nextSearchMatch"
-              @search-close="closeSearch"
-              @go-to-search-match="goToSearchMatch"
             />
             <div class="split-divider" />
             <div class="split-right">

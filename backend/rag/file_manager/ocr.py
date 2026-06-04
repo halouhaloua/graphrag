@@ -7,6 +7,7 @@ OCR识别服务
 """
 import fitz
 import asyncio
+import importlib
 import numpy as np
 from PIL import Image
 from sklearn.cluster import DBSCAN
@@ -15,6 +16,9 @@ import pathlib
 # ========== 策略常量 ==========
 METHOD_DBSCAN = "dbscan"
 METHOD_GAP = "gap"
+COMPLEX_OCR_BATCH = 20
+MAX_IMAGE_PX = 960
+BATCH_SIZE = 100
 detection_model = pathlib.Path(__file__).parent.parent.parent.parent / ".paddlex/official_models/PP-OCRv5_server_det_safetensors"
 recognition_model = pathlib.Path(__file__).parent.parent.parent.parent / ".paddlex/official_models/PP-OCRv5_server_rec_safetensors"
 
@@ -38,16 +42,27 @@ def _get_ocr_engine():
         use_doc_unwarping=False,
         use_textline_orientation=False,
         engine="transformers",
-        device=_device
+        device=_device,
+        # text_recognition_batch_size = 6, # batch size
     )
     return _ocr_engine
 
-# _get_ocr_engine()
+
+def _maybe_clear_gpu_cache():
+    """批次间清理 GPU 缓存，防止多页推理显存持续累积"""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+
 
 # ========== 竖排文本列重构 - DBSCAN 版（自适应） ==========
 
 def _reconstruct_vertical_layout_dbscan(rec_texts: list, dt_polys: list,
-                                        is_vertical: bool = True) -> str:
+                                        is_vertical: bool = True,
+                                        separator: str = "") -> str:
     """
     自适应 DBSCAN 列聚类 + 列内上→下排序
     竖排时列间右→左排序，横排时列间左→右排序
@@ -90,7 +105,7 @@ def _reconstruct_vertical_layout_dbscan(rec_texts: list, dt_polys: list,
         for idx in noise_idx:
             if not cluster_centers:
                 break
-            nearest_lab = min(cluster_centers, key=lambda l: abs(x_vals[idx] - cluster_centers[l]))
+            nearest_lab = min(cluster_centers, key=lambda lab: abs(x_vals[idx] - cluster_centers[lab]))
             if abs(x_vals[idx] - cluster_centers[nearest_lab]) <= eps * 1.5:
                 labels[idx] = nearest_lab
 
@@ -109,15 +124,17 @@ def _reconstruct_vertical_layout_dbscan(rec_texts: list, dt_polys: list,
 
     ancient_text = ""
     for col in final_cols:
-        col_txt = "".join([i["text"] for i in col])
+        col_txt = separator.join([i["text"] for i in col])
         ancient_text += col_txt + "\n"
     return ancient_text
+
 
 # ========== 竖排文本列重构 - 间隙分割版 ==========
 
 def _reconstruct_vertical_layout_gap(rec_texts: list, dt_polys: list,
                                      gap_factor: float = 2.5,
-                                     is_vertical: bool = True) -> str:
+                                     is_vertical: bool = True,
+                                     separator: str = "") -> str:
     """
     基于 x 坐标间隙的列重构（无聚类算法）
     - 适用于版式规整的古籍（列内 x 偏移小，列间有明显空隙）
@@ -138,13 +155,13 @@ def _reconstruct_vertical_layout_gap(rec_texts: list, dt_polys: list,
     xs = np.array([p["cx"] for p in sorted_lines])
 
     if len(xs) <= 1:
-        col = "".join(p["text"] for p in sorted_lines)
+        col = separator.join(p["text"] for p in sorted_lines)
         return col + "\n"
 
     gaps = np.diff(xs)
     median_gap = np.median(gaps) if len(gaps) > 0 else 0
     if median_gap == 0:
-        col = "".join(p["text"] for p in sorted_lines)
+        col = separator.join(p["text"] for p in sorted_lines)
         return col + "\n"
 
     threshold = median_gap * gap_factor
@@ -164,7 +181,7 @@ def _reconstruct_vertical_layout_gap(rec_texts: list, dt_polys: list,
 
     ancient_text = ""
     for col in final_cols:
-        col_txt = "".join([p["text"] for p in col])
+        col_txt = separator.join([p["text"] for p in col])
         ancient_text += col_txt + "\n"
     return ancient_text
 
@@ -194,9 +211,10 @@ def _reconstruct_vertical_layout(rec_texts: list, dt_polys: list,
                                  method: str = METHOD_DBSCAN) -> str:
     """根据 method 选择列重构策略，自动检测文字方向"""
     is_vertical = _is_vertical_layout(dt_polys)
+    separator = "" if is_vertical else " "
     if method == METHOD_GAP:
-        return _reconstruct_vertical_layout_gap(rec_texts, dt_polys, is_vertical=is_vertical)
-    return _reconstruct_vertical_layout_dbscan(rec_texts, dt_polys, is_vertical=is_vertical)
+        return _reconstruct_vertical_layout_gap(rec_texts, dt_polys, is_vertical=is_vertical, separator=separator)
+    return _reconstruct_vertical_layout_dbscan(rec_texts, dt_polys, is_vertical=is_vertical, separator=separator)
 
 # ========== 图像 OCR（支持策略选择） ==========
 
@@ -208,44 +226,71 @@ def _ocr_image(image, method: str = METHOD_DBSCAN) -> str:
     返回识别后的文本
     """
     ocr = _get_ocr_engine()
+    # PP-OCRv5 predict() 只接受 numpy.ndarray 或 str，不支持 PIL Image
+    if not isinstance(image, (np.ndarray, str)):
+        image = np.array(image)
+    # 缩小图片到 MAX_IMAGE_PX 以内，防止 GPU OOM / CPU 卡死
+    h, w = image.shape[:2]
+    if max(h, w) > MAX_IMAGE_PX:
+        scale = MAX_IMAGE_PX / max(h, w)
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        image = np.array(Image.fromarray(image).resize((new_w, new_h), Image.LANCZOS))
     result = ocr.predict(image)
-    for res in result:
-        rec_texts = dict(res)["rec_texts"]
-        dt_polys = dict(res)["dt_polys"]
-        if rec_texts:
-            return _reconstruct_vertical_layout(rec_texts, dt_polys, method)
-    return ""
+    try:
+        for res in result:
+            rec_texts = dict(res)["rec_texts"]
+            dt_polys = dict(res)["dt_polys"]
+            if rec_texts:
+                return _reconstruct_vertical_layout(rec_texts, dt_polys, method)
+        return ""
+    finally:
+        del result
 
 # ========== PDF 转换 ==========
 
-def _pdf_to_images(pdf_path: str, dpi: int = 300) -> list:
-    """将 PDF 每页转换为 PIL Image 列表"""
+def _pdf_to_images(pdf_path: str, dpi: int = 120, start: int = 0, end: int = None):
+    """从 start 页到 end 页，逐页生成 PIL Image"""
     doc = fitz.open(pdf_path)
-    images = []
-    for page_num in range(len(doc)):
-        page = doc[page_num]
-        pix = page.get_pixmap(dpi=dpi)
-        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-        images.append(img)
-    doc.close()
-    return images
+    total = len(doc)
+    if end is None or end > total:
+        end = total
+    try:
+        for page_num in range(start, end):
+            page = doc[page_num]
+            pix = page.get_pixmap(dpi=dpi)
+            img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            yield img
+    finally:
+        doc.close()
 
 # ========== 复杂竖排 OCR 同步实现 ==========
 
 def _complex_ocr_sync(file_path: str, file_ext: str,
-                      method: str = METHOD_DBSCAN) -> str:
+                      method: str = METHOD_DBSCAN,
+                      total_pages: int = 0) -> str:
     """复杂竖排繁体文本OCR 同步实现"""
     ext = file_ext.lower()
     if ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'):
         return _ocr_image(file_path, method=method)
     elif ext == '.pdf':
-        images = _pdf_to_images(file_path)
-        parts = []
-        for img in images:
-            text = _ocr_image(img, method=method)
-            if text:
-                parts.append(text)
-        return '\n'.join(parts)
+        if total_pages <= 0:
+            with fitz.open(file_path) as doc:
+                total_pages = doc.page_count
+        all_parts = []
+        batch_start = 0
+        while batch_start < total_pages:
+            batch_end = min(batch_start + COMPLEX_OCR_BATCH, total_pages)
+            for img in _pdf_to_images(file_path, start=batch_start, end=batch_end):
+                try:
+                    text = _ocr_image(img, method=method)
+                    if text:
+                        all_parts.append(text)
+                finally:
+                    del img
+            _maybe_clear_gpu_cache()
+            batch_start = batch_end
+        return '\n'.join(all_parts)
     else:
         return _common_ocr_sync(file_path, file_ext)
 
@@ -254,10 +299,61 @@ def _complex_ocr_sync(file_path: str, file_ext: str,
 async def complex_ocr(file_path: str, file_ext: str,
                       method: str = METHOD_DBSCAN) -> str:
     """复杂竖排繁体文本OCR 异步入口（支持 strategy 参数）"""
+    total_pages = 1
+    if file_ext.lower() == '.pdf':
+        doc = fitz.open(file_path)
+        total_pages = len(doc)
+        doc.close()
+
+    timeout_sec = max(600, total_pages * 15)
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None, _complex_ocr_sync, file_path, file_ext, method
-    )
+    try:
+        async with asyncio.timeout(timeout_sec):
+            return await loop.run_in_executor(
+                None, lambda: _complex_ocr_sync(file_path, file_ext, method, total_pages)
+            )
+    except TimeoutError:
+        raise TimeoutError(
+            f"识别超时（超过 {timeout_sec} 秒），"
+            "文件过大或图片过于复杂，请尝试将 PDF 拆分为多个小文件后再分别识别"
+        )
+
+# ========== 乱码检测 ==========
+
+def _is_garbled(text: str, threshold: float = 0.5) -> bool:
+    """检测提取文本是否乱码。可打印字符占比低于 threshold 判定为乱码"""
+    if not text or len(text) < 10:
+        return True
+    printable = sum(1 for c in text if c.isprintable() or c in '\n\r\t')
+    return printable / len(text) < threshold
+
+
+# ========== PDF 批量文本提取 ==========
+
+def _extract_batch_pdfplumber(file_path: str, start: int, end: int) -> str:
+    """使用 pdfplumber 提取 PDF 指定页码范围文本"""
+    import pdfplumber
+    parts = []
+    with pdfplumber.open(file_path) as pdf:
+        for page in pdf.pages[start:end]:
+            text = page.extract_text()
+            if text:
+                parts.append(text)
+    return '\n'.join(parts)
+
+
+def _extract_batch_pypdf2(file_path: str, start: int, end: int) -> str:
+    """使用 PyPDF2 提取 PDF 指定页码范围文本"""
+    import PyPDF2
+    parts = []
+    with open(file_path, 'rb') as f:
+        reader = PyPDF2.PdfReader(f)
+        for i in range(start, end):
+            text = reader.pages[i].extract_text()
+            if text:
+                parts.append(text)
+    return '\n'.join(parts)
+
 
 # ========== 常见场景OCR（标准文本提取） ==========
 
@@ -269,26 +365,44 @@ def _common_ocr_sync(file_path: str, file_ext: str) -> str:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 return f.read()
         elif ext == '.pdf':
-            try:
-                import PyPDF2
-                text = ''
-                with open(file_path, 'rb') as f:
-                    for page in PyPDF2.PdfReader(f).pages:
-                        text += page.extract_text() + '\n'
-                return text
-            except ImportError:
-                import pdfplumber
-                text = ''
-                with pdfplumber.open(file_path) as pdf:
-                    for page in pdf.pages:
-                        text += page.extract_text() + '\n'
-                return text
+            with fitz.open(file_path) as doc:
+                total = doc.page_count
+            engines = []
+            if importlib.util.find_spec('pdfplumber'):
+                engines.append(('pdfplumber', _extract_batch_pdfplumber))
+            if importlib.util.find_spec('PyPDF2'):
+                engines.append(('PyPDF2', _extract_batch_pypdf2))
+            if not engines:
+                raise RuntimeError("未找到 PDF 文本提取库（需要 pdfplumber 或 PyPDF2）")
+
+            chosen = None
+            all_parts = []
+            batch_start = 0
+            while batch_start < total:
+                batch_end = min(batch_start + BATCH_SIZE, total)
+                if chosen is None:
+                    for name, extractor in engines:
+                        text = extractor(file_path, batch_start, batch_end)
+                        if not _is_garbled(text):
+                            chosen = (name, extractor)
+                            all_parts.append(text)
+                            break
+                    if chosen is None:
+                        raise RuntimeError(
+                            "PDF 可能是扫描件或使用不支持的编码，"
+                            "请使用「复杂竖排繁体文本OCR」进行图片级识别"
+                        )
+                else:
+                    text = chosen[1](file_path, batch_start, batch_end)
+                    all_parts.append(text)
+                batch_start = batch_end
+            return '\n'.join(all_parts)
         elif ext in ('.doc', '.docx'):
             import docx
             return '\n'.join(p.text for p in docx.Document(file_path).paragraphs)
     except Exception as e:
-        return f"[OCR Error: {e}]"
-    return ''
+        raise RuntimeError(f"OCR 识别失败: {e}") from e
+
 
 async def common_ocr(file_path: str, file_ext: str) -> str:
     """常见场景OCR 异步入口"""

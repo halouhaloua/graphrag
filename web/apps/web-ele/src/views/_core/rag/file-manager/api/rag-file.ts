@@ -152,6 +152,15 @@ async function triggerComplexOcr(fileId: string) {
   return requestClient.post(`/rag/api/file-manager/${fileId}/complex-ocr`);
 }
 
+async function estimateComplexOcr(fileId: string) {
+  return requestClient.get<{
+    totalPages: number;
+    estimatedSeconds: number;
+    estimatedMinutes: number;
+    device: string;
+  }>(`/rag/api/file-manager/${fileId}/complex-ocr/estimate`);
+}
+
 async function getKbListForSelect(page = 1, pageSize = 200) {
   return requestClient.get<{ items: Array<{ id: string; name: string; description?: string }>; total: number }>(
     '/rag/api/knowledge-bases',
@@ -204,6 +213,7 @@ export {
   batchDelete,
   createFolder,
   deleteItem,
+  estimateComplexOcr,
   getDownloadUrl,
   getFileList,
   getFileStreamUrl,

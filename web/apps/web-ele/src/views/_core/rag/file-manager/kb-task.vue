@@ -11,9 +11,9 @@ import SidebarNav from './components/SidebarNav.vue';
 import FilePreviewArea from './components/FilePreviewArea.vue';
 
 import {
+  getKbFileStreamUrl,
   getKbFileText,
   updateKbFileText,
-  getKbFileStreamUrl,
 } from './api/rag-file';
 import { plainTextToHtml, htmlToPlainText } from './utils/file-utils';
 
@@ -103,17 +103,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown));
             v-if="activeNav === 'preview'"
             :file-ext="fileExt"
             :stream-url="streamUrl"
-            :pdf-page="1"
-            :sidebar-collapsed="sidebarCollapsed"
             :ocr-status="'none'"
             :llm-status="'none'"
             :card="true"
-            :search-visible="false"
-            :search-query="''"
-            :search-matches="[]"
-            :search-match-index="0"
-            :search-total="0"
-            @toggle-sidebar="sidebarCollapsed = false"
           />
 
           <template v-if="activeNav === 'edit'">
@@ -133,17 +125,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown));
             <FilePreviewArea
               :file-ext="fileExt"
               :stream-url="streamUrl"
-              :pdf-page="1"
-              :sidebar-collapsed="sidebarCollapsed"
               :ocr-status="'none'"
               :llm-status="'none'"
               :card="false"
-              :search-visible="false"
-              :search-query="''"
-              :search-matches="[]"
-              :search-match-index="0"
-              :search-total="0"
-              @toggle-sidebar="sidebarCollapsed = false"
             />
             <div class="split-divider" />
             <div class="split-right">

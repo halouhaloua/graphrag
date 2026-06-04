@@ -5,7 +5,7 @@ import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -199,21 +199,15 @@ async def stream_file(
     if not os.path.exists(full_path):
         raise HTTPException(status_code=404, detail="文件不存在")
 
-    def file_iterator():
-        with open(full_path, 'rb') as f:
-            while chunk := f.read(8192):
-                yield chunk
-
     from urllib.parse import quote
-    return StreamingResponse(
-        file_iterator(),
+    return FileResponse(
+        path=full_path,
         media_type=record.mime_type or 'application/octet-stream',
         headers={
             'Content-Disposition': f"inline; filename*=UTF-8''{quote(record.name)}",
-            'Content-Length': str(record.size),
             'Accept-Ranges': 'bytes',
-            'Cache-Control': 'public, max-age=3600',
-        }
+            'Cache-Control': 'public, max-age=86400',
+        },
     )
 
 
@@ -238,7 +232,6 @@ async def download_file(
     if not os.path.exists(full_path):
         raise HTTPException(status_code=404, detail="文件不存在")
 
-    from fastapi.responses import FileResponse
     return FileResponse(
         full_path,
         filename=record.name,
@@ -308,6 +301,44 @@ async def trigger_complex_ocr(
     return result
 
 
+@router.get("/{file_id}/complex-ocr/estimate", summary="预估复杂OCR时间")
+async def estimate_complex_ocr(
+    file_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    record = await RagFileManagerService.get_by_id(db, file_id)
+    if not record or record.file_type != 'file':
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    full_path = _validate_safe_path(record.storage_path, RAG_FILE_STORAGE_PATH)
+    if not os.path.exists(full_path):
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    ext = (record.file_ext or '').lower()
+    if ext not in ('.pdf', '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'):
+        raise HTTPException(status_code=400, detail="不支持的文件类型")
+
+    import fitz
+    doc = fitz.open(full_path)
+    total = len(doc)
+    doc.close()
+
+    try:
+        import torch
+        is_gpu = torch.cuda.is_available()
+    except ImportError:
+        is_gpu = False
+    sec_per_page = 3 if is_gpu else 20
+    estimated = total * sec_per_page
+
+    return {
+        "totalPages": total,
+        "estimatedSeconds": estimated,
+        "estimatedMinutes": round(estimated / 60, 1),
+        "device": "GPU" if is_gpu else "CPU",
+    }
+
+
 @router.get("/proxy/{file_id}", summary="代理文件访问")
 async def proxy_file(
     file_id: str,
@@ -322,17 +353,14 @@ async def proxy_file(
     if not os.path.exists(full_path):
         raise HTTPException(status_code=404, detail="文件不存在")
 
-    with open(full_path, 'rb') as f:
-        content = f.read()
-
     disposition = 'attachment' if download else 'inline'
     from urllib.parse import quote
-    return Response(
-        content=content,
+    return FileResponse(
+        path=full_path,
         media_type=record.mime_type or 'application/octet-stream',
         headers={
             'Content-Disposition': f"{disposition}; filename*=UTF-8''{quote(record.name)}",
-            'Content-Length': str(len(content)),
-            'Cache-Control': 'public, max-age=3600',
-        }
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': 'public, max-age=86400',
+        },
     )

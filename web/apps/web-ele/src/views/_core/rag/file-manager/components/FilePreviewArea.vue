@@ -1,58 +1,29 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onErrorCaptured, ref, watch } from 'vue';
-import { ElButton, ElInput } from 'element-plus';
-import { PanelRight, Search } from '@vben/icons';
+import { computed, onErrorCaptured, ref } from 'vue';
+import { ElButton } from 'element-plus';
 
 import VueOfficePdf from '@vue-office/pdf';
 import VueOfficeDocx from '@vue-office/docx';
 
-import type { PdfMatch } from '#/composables/usePdfSearch';
-
 const props = defineProps<{
   fileExt: string;
   streamUrl: string;
-  pdfPage: number;
-  sidebarCollapsed: boolean;
   ocrStatus: string;
   llmStatus: string;
   card: boolean;
-  searchVisible: boolean;
-  searchQuery: string;
-  searchMatches: PdfMatch[];
-  searchMatchIndex: number;
-  searchTotal: number;
 }>();
 
-const emit = defineEmits<{
-  'update:pdfPage': [value: number];
-  'toggle-sidebar': [];
-  'toggle-search': [];
+defineEmits<{
   ocr: [];
   'complex-ocr': [];
-  'update:searchQuery': [value: string];
-  search: [value: string];
-  'search-prev': [];
-  'search-next': [];
-  'search-close': [];
-  'go-to-search-match': [index: number];
 }>();
 
 const isPdf = computed(() => props.fileExt === 'pdf');
 const isDocx = computed(() => props.fileExt === 'docx');
 
-// @vue-office/pdf 在 beforeUnmount 时内部调用 r.destroy() 可能因 PDF 未完全加载而抛出
-// "r.destroy is not a function"，捕获该错误阻止其传播到 Vue Router 导致导航中断
-onErrorCaptured((err) => {
-  if (String(err).includes('destroy is not a function')) {
-    return false;
-  }
-});
-
-const pdfContainerRef = ref<HTMLElement | null>(null);
-
+const pdfRef = ref<any>(null);
 const ZOOM_LEVELS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const zoom = ref(1);
-const pdfRef = ref<any>(null);
 
 function zoomIn() {
   const idx = ZOOM_LEVELS.indexOf(zoom.value);
@@ -76,111 +47,22 @@ function applyZoom() {
   }
 }
 
-let scrollTimer: ReturnType<typeof setInterval> | null = null;
-
-function scrollToPage(pageNum: number) {
-  if (!isPdf.value) return;
-  if (scrollTimer) { clearInterval(scrollTimer); scrollTimer = null; }
-
-  nextTick(() => {
-    let retries = 0;
-    const maxRetries = 20;
-    let scrolled = false;
-
-    function tryScroll(): boolean {
-      if (scrolled) return true;
-
-      const container = pdfContainerRef.value;
-      if (!container) {
-        if (++retries < maxRetries) return false;
-        cleanup();
-        return false;
-      }
-
-      const target =
-        container.querySelector<HTMLElement>(`[data-page-number="${pageNum}"]`)
-        || container.querySelector<HTMLElement>(`[data-page="${pageNum}"]`)
-        || container.querySelector<HTMLElement>(`#page-${pageNum}`)
-        || container.querySelector<HTMLElement>(`.pageContainer-${pageNum}`)
-        || container.querySelector<HTMLElement>(`.page:nth-of-type(${pageNum})`)
-        || container.querySelector<HTMLElement>(`canvas:nth-of-type(${pageNum})`);
-
-      if (target) {
-        let scrollParent: HTMLElement | null = target.parentElement;
-        while (scrollParent && scrollParent !== container && scrollParent !== document.body) {
-          const style = window.getComputedStyle(scrollParent);
-          if (style.overflowY === 'auto' || style.overflowY === 'scroll') break;
-          scrollParent = scrollParent.parentElement;
-        }
-        const scroller = scrollParent && scrollParent !== document.body ? scrollParent : container;
-        scroller.scrollTo({ top: target.offsetTop - target.offsetHeight - 20, behavior: 'smooth' });
-        scrolled = true;
-        cleanup();
-        return true;
-      }
-
-      if (++retries >= maxRetries) { cleanup(); }
-      return false;
-    }
-
-    function cleanup() {
-      if (scrollTimer) { clearInterval(scrollTimer); scrollTimer = null; }
-    }
-
-    if (!tryScroll()) {
-      scrollTimer = setInterval(tryScroll, 200);
-    }
-  });
-}
-
-onBeforeUnmount(() => {
-  if (scrollTimer) {
-    clearInterval(scrollTimer);
-    scrollTimer = null;
+onErrorCaptured((err) => {
+  if (String(err).includes('destroy is not a function')) {
+    return false;
   }
 });
-
-watch(() => props.pdfPage, scrollToPage);
-
-function handleSearchKeydown(e: Event) {
-  const ke = e as KeyboardEvent;
-  if (ke.key === 'Enter') {
-    ke.preventDefault();
-    if (ke.shiftKey) {
-      emit('search-prev');
-    } else {
-      emit('search-next');
-    }
-  }
-  if (ke.key === 'Escape') {
-    emit('search-close');
-  }
-}
 </script>
 
 <template>
   <div :class="card ? 'preview-card' : 'flat-wrapper'">
     <div class="action-bar">
-      <template v-if="sidebarCollapsed">
-        <ElButton
-          :icon="PanelRight"
-          circle
-          size="small"
-          @click="emit('toggle-sidebar')"
-        />
-      </template>
       <div class="action-buttons">
-        <ElButton
-          size="small"
-          :icon="Search"
-          text
-          @click="emit('toggle-search')"
-        />
         <ElButton
           size="small"
           :disabled="ocrStatus === 'pending'"
           text
-          @click="emit('ocr')"
+          @click="$emit('ocr')"
         >
           文字识别
         </ElButton>
@@ -188,12 +70,12 @@ function handleSearchKeydown(e: Event) {
           size="small"
           text
           :disabled="!isPdf || llmStatus === 'pending'"
-          @click="emit('complex-ocr')"
+          @click="$emit('complex-ocr')"
         >
           复杂竖排繁体文本OCR
         </ElButton>
       </div>
-      <div class="zoom-controls">
+      <div v-if="isPdf" class="zoom-controls">
         <ElButton
           size="small"
           text
@@ -212,29 +94,13 @@ function handleSearchKeydown(e: Event) {
           +
         </ElButton>
       </div>
-      <div v-if="isPdf && searchVisible" class="search-bar">
-        <ElInput
-          :model-value="searchQuery"
-          size="small"
-          placeholder="在PDF中搜索..."
-          clearable
-          @input="emit('update:searchQuery', $event); emit('search', $event)"
-          @keydown="handleSearchKeydown"
-        />
-        <span v-if="searchTotal > 0" class="search-count">
-          {{ searchMatchIndex + 1 }}/{{ searchTotal }}
-        </span>
-        <ElButton size="small" text :disabled="searchMatchIndex <= 0" @click="emit('search-prev')">▲</ElButton>
-        <ElButton size="small" text :disabled="searchMatchIndex >= searchTotal - 1" @click="emit('search-next')">▼</ElButton>
-        <ElButton size="small" text @click="emit('search-close')">✕</ElButton>
-      </div>
     </div>
 
     <div v-if="card" class="preview-body">
-      <div v-if="isPdf" ref="pdfContainerRef" class="office-container">
-        <VueOfficePdf ref="pdfRef" :page="pdfPage" :src="streamUrl" @update:page="emit('update:pdfPage', $event)" />
+      <div v-if="isPdf && streamUrl" class="office-container">
+        <VueOfficePdf ref="pdfRef" :src="streamUrl" />
       </div>
-      <div v-if="isDocx" class="office-container" :style="isDocx ? { zoom } : undefined">
+      <div v-if="isDocx && streamUrl" class="office-container" :style="{ zoom }">
         <VueOfficeDocx :src="streamUrl" />
       </div>
       <div v-if="!isPdf && !isDocx" class="unsupported-tip">
@@ -242,10 +108,10 @@ function handleSearchKeydown(e: Event) {
       </div>
     </div>
     <template v-else>
-      <div v-if="isPdf" ref="pdfContainerRef" class="office-container">
-        <VueOfficePdf ref="pdfRef" :page="pdfPage" :src="streamUrl" @update:page="emit('update:pdfPage', $event)" />
+      <div v-if="isPdf && streamUrl" class="office-container">
+        <VueOfficePdf ref="pdfRef" :src="streamUrl" />
       </div>
-      <div v-if="isDocx" class="office-container" :style="isDocx ? { zoom } : undefined">
+      <div v-if="isDocx && streamUrl" class="office-container" :style="{ zoom }">
         <VueOfficeDocx :src="streamUrl" />
       </div>
       <div v-if="!isPdf && !isDocx" class="unsupported-tip">
@@ -335,24 +201,4 @@ function handleSearchKeydown(e: Event) {
   height: 200px;
   color: var(--el-text-color-secondary);
 }
-
-.search-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.search-bar :deep(.el-input) {
-  width: 180px;
-}
-
-.search-count {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  white-space: nowrap;
-  min-width: 50px;
-  text-align: center;
-}
-
 </style>
