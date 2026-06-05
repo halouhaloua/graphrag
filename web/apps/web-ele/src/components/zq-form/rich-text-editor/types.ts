@@ -21,6 +21,8 @@ export interface RichTextEditorProps {
   maxLength?: number;
   /** 自定义工具栏配置 */
   toolbarConfig?: ToolbarConfig;
+  /** 侧栏是否已折叠（显示展开按钮） */
+  sidebarCollapsed?: boolean;
 }
 
 export interface RichTextEditorEmits {
@@ -29,6 +31,8 @@ export interface RichTextEditorEmits {
   (e: 'focus', event: FocusEvent): void;
   (e: 'blur', event: FocusEvent): void;
   (e: 'ready', editor: Editor): void;
+  (e: 'save'): void;
+  (e: 'expandSidebar'): void;
 }
 
 export interface ToolbarConfig {
@@ -56,7 +60,8 @@ export type ToolbarGroup =
   | 'history' // 撤销/重做
   | 'indent' // 缩进
   | 'insert' // 插入链接/图片/表格/附件/视频
-  | 'list'; // 列表
+  | 'list' // 列表
+  | 'save'; // 保存
 
 export const defaultToolbarGroups: ToolbarGroup[] = [
   'history',

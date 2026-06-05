@@ -4,6 +4,8 @@ RAG文件管理服务
 import hashlib
 import mimetypes
 import os
+import shutil
+from pathlib import Path
 
 from loguru import logger
 from datetime import datetime
@@ -346,6 +348,20 @@ class RagFileManagerService:
         db.add(record)
         await db.commit()
         await db.refresh(record)
+
+        from rag.kb_manager.service import DATA_UPLOAD_DIR
+        source_path = Path(RAG_FILE_STORAGE_PATH) / item.storage_path
+        if source_path.exists():
+            ext = record.file_type or '.txt'
+            if not ext.startswith('.'):
+                ext = '.' + ext
+            target_dir = DATA_UPLOAD_DIR / kb_id
+            target_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copy2(str(source_path), str(target_dir / f"{record.id}{ext}"))
+            except Exception as e:
+                logger.warning(f"复制文件到知识库失败: {e}")
+
         return {
             "id": record.id,
             "kb_id": record.kb_id,

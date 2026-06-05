@@ -12,8 +12,8 @@ from chronicle_writer.agents.prompts import (
     RESEARCHER_PROMPT,
     DRAFTER_PROMPT,
     REVIEWER_PROMPT,
-    CITATION_PROMPT,
     MAIN_AGENT_PROMPT,
+    RELEVANCE_FILTER_PROMPT,
 )
 from chronicle_writer.tools import (
     RAGSearchTool,
@@ -128,18 +128,30 @@ def create_reviewer() -> Agent:
     )
 
 
-def create_citation_agent() -> Agent:
-    """创建引用管理智能体"""
+# ─── 已弃用：引文管理智能体（由 create_relevance_filter 替代） ───
+# def create_citation_agent() -> Agent:
+#     """创建引用管理智能体"""
+#     return Agent(
+#         name="citation",
+#         system_prompt=CITATION_PROMPT,
+#         model=_get_model(),
+#         toolkit=Toolkit(
+#             tools=[
+#                 add_reference_tool,
+#             ],
+#             skills_or_loaders=[_get_skills_loader()],
+#         ),
+#         context_config=_get_context_config(),
+#     )
+
+
+def create_relevance_filter() -> Agent:
+    """创建相关度审校智能体"""
     return Agent(
-        name="citation",
-        system_prompt=CITATION_PROMPT,
+        name="relevance_filter",
+        system_prompt=RELEVANCE_FILTER_PROMPT,
         model=_get_model(),
-        toolkit=Toolkit(
-            tools=[
-                add_reference_tool,
-            ],
-            skills_or_loaders=[_get_skills_loader()],
-        ),
+        toolkit=Toolkit(skills_or_loaders=[_get_skills_loader()]),
         context_config=_get_context_config(),
     )
 

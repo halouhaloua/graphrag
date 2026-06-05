@@ -23,7 +23,8 @@ const loading = ref(true);
 onMounted(async () => {
   kbId.value = route.params.kbId as string;
   fileId.value = route.params.fileId as string;
-  previewCustomUrl.value = getKbFilePreviewUrl(kbId.value, fileId.value);
+  const accessStore = useAccessStore();
+  previewCustomUrl.value = getKbFilePreviewUrl(kbId.value, fileId.value, accessStore.accessToken);
 
   try {
     const res: any = await getFileListApi(kbId.value);

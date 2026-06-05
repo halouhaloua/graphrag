@@ -170,7 +170,7 @@ def rerank_chunks(
                     ).item()
                     tag_score = max(0.0, tag_score)
 
-            final_score = combined + 0.3 * tag_score
+            final_score = combined # + 0.3 * tag_score
             reranked.append((cid, final_score, content))
         except Exception as e:
             logger.warning(f"rerank_chunks error for {cid}: {e}")

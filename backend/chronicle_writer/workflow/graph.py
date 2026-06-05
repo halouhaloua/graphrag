@@ -2,15 +2,19 @@ from langgraph.graph import StateGraph, END
 from chronicle_writer.workflow.state import ChronicleWritingState
 from chronicle_writer.workflow.nodes import (
     plan_project_node,
-    collect_materials_node,
+    decompose_only_node,
+    retrieve_aspect_node,
     verify_evidence_node,
-    human_review_node,
-    write_sections_node,
+    filter_relevance_node,
+    write_sections_coord_node,
+    write_section_node,
     generate_appendix_node,
     compile_document_node,
     review_document_node,
     quality_check_node,
     finalize_node,
+    _decide_retrieve_next,
+    _decide_write_next,
 )
 
 
@@ -22,25 +26,8 @@ def _has_critical_issues(state: ChronicleWritingState) -> bool:
     )
 
 
-def _decide_human_review(state: ChronicleWritingState) -> str:
-    """③→④/⑤: 是否需要人工复核"""
-    contradictions = state.get("contradictions", [])
-    if contradictions and len(contradictions) > 0:
-        return "interrupt"
-    return "proceed"
-
-
-def _decide_after_human_review(state: ChronicleWritingState) -> str:
-    """④→③/⑤: 人工复核决策"""
-    decision = state.get("human_decision", {})
-    action = decision.get("action", "override")
-    if action == "retry":
-        return "retry_verify"
-    return "override"
-
-
 def _decide_revision_needed(state: ChronicleWritingState) -> str:
-    """⑧→⑤/⑨: 审校后是否需修订（不篡改 state，递增已在 review_document_node 完成）"""
+    """⑧→⑤/⑨: 审校后是否需修订"""
     iteration = state.get("iteration_count", 0)
     max_iter = state.get("max_iterations", 3)
 
@@ -74,10 +61,12 @@ def build_chronicle_graph() -> StateGraph:
     builder = StateGraph(ChronicleWritingState)
 
     builder.add_node("plan_project", plan_project_node)
-    builder.add_node("collect_materials", collect_materials_node)
+    builder.add_node("decompose_only", decompose_only_node)
+    builder.add_node("retrieve_aspect", retrieve_aspect_node)
     builder.add_node("verify_evidence", verify_evidence_node)
-    builder.add_node("human_review", human_review_node)
-    builder.add_node("write_sections", write_sections_node)
+    builder.add_node("filter_relevance", filter_relevance_node)
+    builder.add_node("write_sections_coord", write_sections_coord_node)
+    builder.add_node("write_section", write_section_node)
     builder.add_node("generate_appendix", generate_appendix_node)
     builder.add_node("compile_document", compile_document_node)
     builder.add_node("review_document", review_document_node)
@@ -86,36 +75,41 @@ def build_chronicle_graph() -> StateGraph:
 
     builder.set_entry_point("plan_project")
 
-    builder.add_edge("plan_project", "collect_materials")
-    builder.add_edge("collect_materials", "verify_evidence")
-
+    # 规划 → 分解 → 逐方面检索循环
+    builder.add_edge("plan_project", "decompose_only")
+    builder.add_edge("decompose_only", "retrieve_aspect")
     builder.add_conditional_edges(
-        "verify_evidence",
-        _decide_human_review,
+        "retrieve_aspect",
+        _decide_retrieve_next,
         {
-            "interrupt": "human_review",
-            "proceed": "write_sections",
+            "retrieve_aspect": "retrieve_aspect",
+            "verify_evidence": "verify_evidence",
         },
     )
 
+    builder.add_edge("verify_evidence", "filter_relevance")
+    builder.add_edge("filter_relevance", "write_sections_coord")
+
+    # 撰写准备 → 逐节撰写循环
+    builder.add_edge("write_sections_coord", "write_section")
     builder.add_conditional_edges(
-        "human_review",
-        _decide_after_human_review,
+        "write_section",
+        _decide_write_next,
         {
-            "retry_verify": "verify_evidence",
-            "override": "write_sections",
+            "write_section": "write_section",
+            "generate_appendix": "generate_appendix",
         },
     )
 
-    builder.add_edge("write_sections", "generate_appendix")
     builder.add_edge("generate_appendix", "compile_document")
     builder.add_edge("compile_document", "review_document")
 
+    # revision 循环 → 回到撰写准备（重置 counter）
     builder.add_conditional_edges(
         "review_document",
         _decide_revision_needed,
         {
-            "revise": "write_sections",
+            "revise": "write_sections_coord",
             "proceed": "quality_check",
         },
     )
@@ -124,7 +118,7 @@ def build_chronicle_graph() -> StateGraph:
         "quality_check",
         _decide_quality_pass,
         {
-            "revise": "write_sections",
+            "revise": "write_sections_coord",
             "deliver": "finalize",
         },
     )

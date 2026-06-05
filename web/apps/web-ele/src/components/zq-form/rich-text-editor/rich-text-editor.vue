@@ -20,22 +20,20 @@ import {
   Highlighter,
   Image,
   Italic,
-  Link,
   List,
   ListOrdered,
-  Maximize2,
-  Minimize2,
   Minus,
   Palette,
+  PanelRight,
   Paperclip,
   Plus,
   Quote,
+  Save,
   Redo2,
   Rows2,
   Strikethrough,
   Table,
   Trash2,
-  Type,
   Underline,
   Undo2,
   Video,
@@ -68,13 +66,11 @@ import {
   ElTabPane,
   ElTabs,
 } from 'element-plus';
-import { Markdown } from 'tiptap-markdown';
 
 import { uploadFile as uploadFileApi } from '#/api/core/file';
 import { getFileUrl } from '#/composables/useFileUrl';
 
 import { Attachment } from './extensions/attachment';
-import { FontSize } from './extensions/font-size';
 import { ResizableImage } from './extensions/resizable-image';
 import { Video as VideoExt } from './extensions/video';
 import { defaultInsertConfig, defaultToolbarGroups } from './types';
@@ -96,11 +92,6 @@ const props = withDefaults(defineProps<RichTextEditorProps>(), {
 });
 
 const emit = defineEmits<RichTextEditorEmits>();
-
-// 链接弹窗
-const linkPopoverVisible = ref(false);
-const linkUrl = ref('');
-const linkButtonRef = ref<HTMLElement | null>(null);
 
 // 图片弹窗
 const imagePopoverVisible = ref(false);
@@ -125,29 +116,6 @@ const videoUploadProgress = ref(0);
 const videoUploadTab = ref('upload');
 const videoUrl = ref('');
 
-// 全屏状态
-const isFullscreen = ref(false);
-const fullscreenWidth = ref<'a4' | 'a5' | 'full' | 'letter'>('a4');
-
-// 纸张尺寸选项（宽度，单位px，按96dpi计算）
-const paperSizes = {
-  full: { label: '全宽', width: '100%' },
-  a4: { label: 'A4', width: '794px' }, // 210mm = 794px @96dpi
-  a5: { label: 'A5', width: '559px' }, // 148mm = 559px @96dpi
-  letter: { label: 'Letter', width: '816px' }, // 8.5in = 816px @96dpi
-};
-
-const toggleFullscreen = () => {
-  isFullscreen.value = !isFullscreen.value;
-  if (!isFullscreen.value) {
-    fullscreenWidth.value = 'full';
-  }
-};
-
-const setFullscreenWidth = (size: 'a4' | 'a5' | 'full' | 'letter') => {
-  fullscreenWidth.value = size;
-};
-
 // 编辑器实例
 const editor = useEditor({
   content: props.modelValue,
@@ -167,7 +135,6 @@ const editor = useEditor({
     }),
     TextStyle,
     Color,
-    FontSize,
     LinkExt.configure({
       openOnClick: false,
       HTMLAttributes: {
@@ -188,16 +155,6 @@ const editor = useEditor({
     VideoExt,
     Placeholder.configure({
       placeholder: props.placeholder,
-    }),
-    Markdown.configure({
-      html: true,
-      tightLists: true,
-      tightListClass: 'tight',
-      bulletListMarker: '-',
-      linkify: true,
-      breaks: true,
-      transformPastedText: true,
-      transformCopiedText: true,
     }),
   ],
   onUpdate: ({ editor }) => {
@@ -321,39 +278,6 @@ const setHighlight = (color: null | string) => {
   }
 };
 
-// 字体大小选项
-const fontSizes = [
-  { label: '12px', value: '12px' },
-  { label: '14px', value: '14px' },
-  { label: '16px', value: '16px' },
-  { label: '18px', value: '18px' },
-  { label: '20px', value: '20px' },
-  { label: '24px', value: '24px' },
-  { label: '28px', value: '28px' },
-  { label: '32px', value: '32px' },
-  { label: '36px', value: '36px' },
-];
-
-const setFontSize = (size: string) => {
-  editor.value?.chain().focus().setFontSize(size).run();
-};
-
-const setLink = () => {
-  if (linkUrl.value) {
-    editor.value?.chain().focus().setLink({ href: linkUrl.value }).run();
-  } else {
-    editor.value?.chain().focus().unsetLink().run();
-  }
-  linkPopoverVisible.value = false;
-  linkUrl.value = '';
-};
-
-const openLinkPopover = () => {
-  const previousUrl = editor.value?.getAttributes('link').href;
-  linkUrl.value = previousUrl || '';
-  linkPopoverVisible.value = true;
-};
-
 // 插入图片的通用方法
 const insertImage = (src: string) => {
   editor.value
@@ -410,14 +334,12 @@ const handleImageUpload = async (event: Event) => {
     imageUploadProgress.value = 0;
 
     const result = await uploadFileApi(file, {
-      source: 'form',
       onProgress: (progress) => {
         imageUploadProgress.value = progress.percentage;
       },
     });
 
     if (result && result.id) {
-      // 使用文件流 URL
       const imgUrl = await getFileUrl(result.id);
       insertImage(imgUrl);
       ElMessage.success('图片上传成功');
@@ -448,7 +370,7 @@ const handlePaste = async (event: ClipboardEvent) => {
 
       try {
         imageUploading.value = true;
-        const result = await uploadFileApi(file, { source: 'form' });
+        const result = await uploadFileApi(file);
         if (result && result.id) {
           const imgUrl = await getFileUrl(result.id);
           insertImage(imgUrl);
@@ -477,7 +399,7 @@ const handleDrop = async (event: DragEvent) => {
 
   try {
     imageUploading.value = true;
-    const result = await uploadFileApi(file, { source: 'form' });
+    const result = await uploadFileApi(file);
     if (result && result.id) {
       const imgUrl = await getFileUrl(result.id);
       insertImage(imgUrl);
@@ -577,7 +499,6 @@ const handleAttachmentUpload = async (event: Event) => {
     attachmentUploadProgress.value = 0;
 
     const result = await uploadFileApi(file, {
-      source: 'form',
       onProgress: (progress) => {
         attachmentUploadProgress.value = progress.percentage;
       },
@@ -653,7 +574,6 @@ const handleVideoUpload = async (event: Event) => {
     videoUploadProgress.value = 0;
 
     const result = await uploadFileApi(file, {
-      source: 'form',
       onProgress: (progress) => {
         videoUploadProgress.value = progress.percentage;
       },
@@ -735,61 +655,62 @@ defineExpose({
   getHTML: () => editor.value?.getHTML() || '',
   /** 获取纯文本内容 */
   getText: () => editor.value?.getText() || '',
-  /** 获取 Markdown 内容 */
-  getMarkdown: () =>
-    (editor.value?.storage as any)?.markdown?.getMarkdown() || '',
   /** 设置内容 */
   setContent: (content: string) => editor.value?.commands.setContent(content),
   /** 清空内容 */
   clear: () => editor.value?.commands.clearContent(),
   /** 聚焦 */
   focus: () => editor.value?.commands.focus(),
-  /** 在光标位置插入文本 */
-  insertText: (text: string) => {
-    editor.value?.chain().focus().insertContent(text).run();
-  },
 });
 </script>
 
 <template>
   <div
     class="rich-text-editor rounded border border-[var(--el-border-color)] bg-[var(--el-bg-color)]"
-    :class="{
-      'is-disabled': disabled,
-      'is-readonly': readonly,
-      'is-fullscreen': isFullscreen,
-    }"
+    :class="{ 'is-disabled': disabled, 'is-readonly': readonly }"
   >
     <!-- 工具栏 -->
     <div
       v-if="showToolbar && !readonly"
-      class="toolbar flex flex-wrap items-center gap-1 border-b border-[var(--el-border-color)] bg-[var(--el-fill-color-light)] px-2 py-1"
+      class="toolbar border-b border-[var(--el-border-color)] bg-[var(--el-bg-color)]"
     >
-      <!-- 撤销/重做 -->
-      <template v-if="hasGroup('history')">
-        <ElButton
-          text
-          size="small"
-          :disabled="!editor?.can().undo()"
-          title="撤销"
-          @click="undo"
-        >
-          <Undo2 class="h-4 w-4" />
-        </ElButton>
-        <ElButton
-          text
-          size="small"
-          :disabled="!editor?.can().redo()"
-          title="重做"
-          @click="redo"
-        >
-          <Redo2 class="h-4 w-4" />
-        </ElButton>
-        <ElDivider direction="vertical" />
-      </template>
+      <!-- 保存 -->
+      <div v-if="hasGroup('save')" class="toolbar-group">
+        <div class="toolbar-group-buttons">
+          <ElButton text size="small" title="保存 (Ctrl+S)" @click="$emit('save')">
+            <Save class="h-4 w-4" />
+          </ElButton>
+        </div>
+        <span class="toolbar-group-label">保存</span>
+      </div>
+      <!-- 历史 -->
+      <div v-if="hasGroup('history')" class="toolbar-group">
+        <div class="toolbar-group-buttons">
+          <ElButton
+            text
+            size="small"
+            :disabled="!editor?.can().undo()"
+            title="撤销"
+            @click="undo"
+          >
+            <Undo2 class="h-4 w-4" />
+          </ElButton>
+          <ElButton
+            text
+            size="small"
+            :disabled="!editor?.can().redo()"
+            title="重做"
+            @click="redo"
+          >
+            <Redo2 class="h-4 w-4" />
+          </ElButton>
+        </div>
+        <span class="toolbar-group-label">历史</span>
+      </div>
 
-      <!-- 标题 -->
-      <template v-if="hasGroup('heading')">
+    <!-- 标题 -->
+    <div v-if="hasGroup('heading')" class="toolbar-group">
+      <div class="toolbar-group-buttons">
         <ElDropdown trigger="click" @command="setHeading">
           <ElButton text size="small" title="标题">
             <Heading1 class="h-4 w-4" />
@@ -817,68 +738,56 @@ defineExpose({
             </ElDropdownMenu>
           </template>
         </ElDropdown>
-        <ElDivider direction="vertical" />
-      </template>
+        </div>
+        <span class="toolbar-group-label">标题</span>
+      </div>
 
-      <!-- 格式化 -->
-      <template v-if="hasGroup('format')">
-        <ElDropdown trigger="click" @command="setFontSize">
-          <ElButton text size="small" title="字体大小">
-            <Type class="h-4 w-4" />
+      <!-- 字体 -->
+      <div v-if="hasGroup('format')" class="toolbar-group">
+        <div class="toolbar-group-buttons">
+          <ElButton
+            text
+            size="small"
+            :class="{ 'is-active': isActive('bold') }"
+            title="加粗"
+            @click="toggleBold"
+          >
+            <Bold class="h-4 w-4" />
           </ElButton>
-          <template #dropdown>
-            <ElDropdownMenu>
-              <ElDropdownItem
-                v-for="size in fontSizes"
-                :key="size.value"
-                :command="size.value"
-              >
-                {{ size.label }}
-              </ElDropdownItem>
-            </ElDropdownMenu>
-          </template>
-        </ElDropdown>
-        <ElButton
-          text
-          size="small"
-          :class="{ 'is-active': isActive('bold') }"
-          title="加粗"
-          @click="toggleBold"
-        >
-          <Bold class="h-4 w-4" />
-        </ElButton>
-        <ElButton
-          text
-          size="small"
-          :class="{ 'is-active': isActive('italic') }"
-          title="斜体"
-          @click="toggleItalic"
-        >
-          <Italic class="h-4 w-4" />
-        </ElButton>
-        <ElButton
-          text
-          size="small"
-          :class="{ 'is-active': isActive('underline') }"
-          title="下划线"
-          @click="toggleUnderline"
-        >
-          <Underline class="h-4 w-4" />
-        </ElButton>
-        <ElButton
-          text
-          size="small"
-          :class="{ 'is-active': isActive('strike') }"
-          title="删除线"
-          @click="toggleStrike"
-        >
-          <Strikethrough class="h-4 w-4" />
-        </ElButton>
-        <ElDivider direction="vertical" />
-      </template>
+          <ElButton
+            text
+            size="small"
+            :class="{ 'is-active': isActive('italic') }"
+            title="斜体"
+            @click="toggleItalic"
+          >
+            <Italic class="h-4 w-4" />
+          </ElButton>
+          <ElButton
+            text
+            size="small"
+            :class="{ 'is-active': isActive('underline') }"
+            title="下划线"
+            @click="toggleUnderline"
+          >
+            <Underline class="h-4 w-4" />
+          </ElButton>
+          <ElButton
+            text
+            size="small"
+            :class="{ 'is-active': isActive('strike') }"
+            title="删除线"
+            @click="toggleStrike"
+          >
+            <Strikethrough class="h-4 w-4" />
+          </ElButton>
+        </div>
+        <span class="toolbar-group-label">字体</span>
+      </div>
 
-      <!-- 颜色 -->
-      <template v-if="hasGroup('color')">
+    <!-- 颜色 -->
+    <div v-if="hasGroup('color')" class="toolbar-group">
+      <div class="toolbar-group-buttons">
         <ElPopover trigger="click" :width="200">
           <template #reference>
             <ElButton text size="small" title="文字颜色">
@@ -923,11 +832,13 @@ defineExpose({
             <ElColorPicker class="mt-2" size="small" @change="setHighlight" />
           </div>
         </ElPopover>
-        <ElDivider direction="vertical" />
-      </template>
+      </div>
+      <span class="toolbar-group-label">颜色</span>
+    </div>
 
-      <!-- 对齐 -->
-      <template v-if="hasGroup('align')">
+    <!-- 对齐 -->
+    <div v-if="hasGroup('align')" class="toolbar-group">
+      <div class="toolbar-group-buttons">
         <ElButton
           text
           size="small"
@@ -964,70 +875,38 @@ defineExpose({
         >
           <AlignJustify class="h-4 w-4" />
         </ElButton>
-        <ElDivider direction="vertical" />
-      </template>
+      </div>
+      <span class="toolbar-group-label">对齐</span>
+    </div>
 
-      <!-- 列表 -->
-      <template v-if="hasGroup('list')">
+    <!-- 列表 -->
+    <div v-if="hasGroup('list')" class="toolbar-group">
+      <div class="toolbar-group-buttons">
         <ElButton
-          text
-          size="small"
-          :class="{ 'is-active': isActive('bulletList') }"
-          title="无序列表"
-          @click="toggleBulletList"
-        >
-          <List class="h-4 w-4" />
-        </ElButton>
-        <ElButton
-          text
-          size="small"
-          :class="{ 'is-active': isActive('orderedList') }"
-          title="有序列表"
-          @click="toggleOrderedList"
-        >
-          <ListOrdered class="h-4 w-4" />
-        </ElButton>
-        <ElDivider direction="vertical" />
-      </template>
+            text
+            size="small"
+            :class="{ 'is-active': isActive('bulletList') }"
+            title="无序列表"
+            @click="toggleBulletList"
+          >
+            <List class="h-4 w-4" />
+          </ElButton>
+          <ElButton
+            text
+            size="small"
+            :class="{ 'is-active': isActive('orderedList') }"
+            title="有序列表"
+            @click="toggleOrderedList"
+          >
+            <ListOrdered class="h-4 w-4" />
+          </ElButton>
+      </div>
+      <span class="toolbar-group-label">列表</span>
+    </div>
 
-      <!-- 插入 -->
-      <template v-if="hasGroup('insert')">
-        <ElPopover
-          v-if="hasInsert('link')"
-          v-model:visible="linkPopoverVisible"
-          trigger="click"
-          :width="280"
-        >
-          <template #reference>
-            <ElButton
-              ref="linkButtonRef"
-              text
-              size="small"
-              :class="{ 'is-active': isActive('link') }"
-              title="链接"
-              @click="openLinkPopover"
-            >
-              <Link class="h-4 w-4" />
-            </ElButton>
-          </template>
-          <div class="link-panel">
-            <div class="mb-2 text-sm font-medium">插入链接</div>
-            <ElInput
-              v-model="linkUrl"
-              placeholder="请输入链接地址"
-              size="small"
-              @keyup.enter="setLink"
-            />
-            <div class="mt-2 flex justify-end gap-2">
-              <ElButton size="small" @click="linkPopoverVisible = false">
-                取消
-              </ElButton>
-              <ElButton type="primary" size="small" @click="setLink">
-                确定
-              </ElButton>
-            </div>
-          </div>
-        </ElPopover>
+    <!-- 插入 -->
+    <div v-if="hasGroup('insert')" class="toolbar-group">
+      <div class="toolbar-group-buttons">
         <ElPopover
           v-if="hasInsert('image')"
           v-model:visible="imagePopoverVisible"
@@ -1057,10 +936,13 @@ defineExpose({
                     <Image
                       class="mb-2 h-8 w-8 text-[var(--el-text-color-secondary)]"
                     />
-                    <span class="text-sm text-[var(--el-text-color-secondary)]">点击或拖拽图片到此处</span>
+                    <span class="text-sm text-[var(--el-text-color-secondary)]"
+                      >点击或拖拽图片到此处</span
+                    >
                     <span
                       class="mt-1 text-xs text-[var(--el-text-color-placeholder)]"
-                      >支持 jpg、png、gif 等格式，最大 10MB</span>
+                      >支持 jpg、png、gif 等格式，最大 10MB</span
+                    >
                   </div>
                   <ElProgress
                     v-if="imageUploading"
@@ -1197,8 +1079,12 @@ defineExpose({
               <Paperclip
                 class="mb-2 h-8 w-8 text-[var(--el-text-color-secondary)]"
               />
-              <span class="text-sm text-[var(--el-text-color-secondary)]">点击选择文件</span>
-              <span class="mt-1 text-xs text-[var(--el-text-color-placeholder)]">支持常见文档格式，最大 50MB</span>
+              <span class="text-sm text-[var(--el-text-color-secondary)]"
+                >点击选择文件</span
+              >
+              <span class="mt-1 text-xs text-[var(--el-text-color-placeholder)]"
+                >支持常见文档格式，最大 50MB</span
+              >
             </div>
             <ElProgress
               v-if="attachmentUploading"
@@ -1237,10 +1123,13 @@ defineExpose({
                     <Video
                       class="mb-2 h-8 w-8 text-[var(--el-text-color-secondary)]"
                     />
-                    <span class="text-sm text-[var(--el-text-color-secondary)]">点击选择视频</span>
+                    <span class="text-sm text-[var(--el-text-color-secondary)]"
+                      >点击选择视频</span
+                    >
                     <span
                       class="mt-1 text-xs text-[var(--el-text-color-placeholder)]"
-                      >支持 MP4、WebM、OGG，最大 100MB</span>
+                      >支持 MP4、WebM、OGG，最大 100MB</span
+                    >
                   </div>
                   <ElProgress
                     v-if="videoUploading"
@@ -1275,11 +1164,13 @@ defineExpose({
             </ElTabs>
           </div>
         </ElPopover>
-        <ElDivider direction="vertical" />
-      </template>
+      </div>
+      <span class="toolbar-group-label">插入</span>
+    </div>
 
-      <!-- 引用 -->
-      <template v-if="hasGroup('blockquote')">
+    <!-- 引用 -->
+    <div v-if="hasGroup('blockquote')" class="toolbar-group">
+      <div class="toolbar-group-buttons">
         <ElButton
           text
           size="small"
@@ -1289,10 +1180,13 @@ defineExpose({
         >
           <Quote class="h-4 w-4" />
         </ElButton>
-      </template>
+      </div>
+      <span class="toolbar-group-label">引用</span>
+    </div>
 
-      <!-- 代码 -->
-      <template v-if="hasGroup('code')">
+    <!-- 代码 -->
+    <div v-if="hasGroup('code')" class="toolbar-group">
+      <div class="toolbar-group-buttons">
         <ElButton
           text
           size="small"
@@ -1302,68 +1196,49 @@ defineExpose({
         >
           <Code class="h-4 w-4" />
         </ElButton>
-      </template>
+      </div>
+      <span class="toolbar-group-label">代码</span>
+    </div>
 
-      <!-- 分割线 -->
-      <template v-if="hasGroup('divider')">
+    <!-- 分割线 -->
+    <div v-if="hasGroup('divider')" class="toolbar-group">
+      <div class="toolbar-group-buttons">
         <ElButton text size="small" title="分割线" @click="setHorizontalRule">
           <Minus class="h-4 w-4" />
         </ElButton>
-      </template>
+      </div>
+      <span class="toolbar-group-label">分割线</span>
+    </div>
 
-      <!-- 清除格式 -->
-      <template v-if="hasGroup('clear')">
-        <ElDivider direction="vertical" />
+    <!-- 清除 -->
+    <div v-if="hasGroup('clear')" class="toolbar-group">
+      <div class="toolbar-group-buttons">
         <ElButton text size="small" title="清除格式" @click="clearFormat">
           <Eraser class="h-4 w-4" />
         </ElButton>
-      </template>
-
-      <!-- 全屏按钮和纸张尺寸选择 -->
-      <div class="ml-auto flex items-center gap-1">
-        <!-- 纸张尺寸选择（仅全屏时显示） -->
-        <template v-if="isFullscreen">
-          <ElButton
-            v-for="(config, key) in paperSizes"
-            :key="key"
-            text
-            size="small"
-            :class="{ 'is-active': fullscreenWidth === key }"
-            @click="setFullscreenWidth(key as 'full' | 'a4' | 'a5' | 'letter')"
-          >
-            {{ config.label }}
-          </ElButton>
-          <ElDivider direction="vertical" />
-        </template>
-        <ElButton
-          text
-          size="small"
-          :title="isFullscreen ? '退出全屏' : '全屏编辑'"
-          @click="toggleFullscreen"
-        >
-          <Minimize2 v-if="isFullscreen" class="h-4 w-4" />
-          <Maximize2 v-else class="h-4 w-4" />
-        </ElButton>
       </div>
+      <span class="toolbar-group-label">清除</span>
+    </div>
+
     </div>
 
     <!-- 编辑器内容区 -->
     <div
       class="editor-content overflow-auto"
-      :class="{ 'fullscreen-content': isFullscreen }"
       :style="editorStyle"
       @paste="handlePaste"
       @drop="handleDrop"
       @dragover.prevent
     >
-      <div
-        v-if="isFullscreen && fullscreenWidth !== 'full'"
-        class="editor-paper mx-auto bg-[var(--el-bg-color)] shadow-lg"
-        :style="{ width: paperSizes[fullscreenWidth].width }"
-      >
-        <EditorContent :editor="editor" class="h-full" />
-      </div>
-      <EditorContent v-else :editor="editor" class="h-full" />
+      <ElButton
+        v-if="sidebarCollapsed"
+        :icon="PanelRight"
+        circle
+        size="small"
+        class="content-expand-btn"
+        @click="$emit('expandSidebar')"
+      />
+      <EditorContent :editor="editor" class="h-full" />
     </div>
 
     <!-- 底部状态栏 -->
@@ -1391,42 +1266,34 @@ defineExpose({
       display: none;
     }
   }
-
-  &.is-fullscreen {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 9999;
-    border-radius: 0;
-    display: flex;
-    flex-direction: column;
-
-    .editor-content {
-      flex: 1;
-      max-height: none !important;
-      min-height: 0 !important;
-    }
-
-    .fullscreen-content {
-      background-color: var(--el-fill-color-light);
-      padding: 20px;
-    }
-
-    .editor-paper {
-      min-height: 100%;
-      padding: 40px;
-      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
-    }
-  }
 }
 
 .toolbar {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 0;
+  padding-bottom: 0px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--el-border-color) transparent;
+
+  &::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--el-border-color);
+    border-radius: 3px;
+  }
+
   :deep(.el-button) {
-    min-width: 28px;
-    height: 28px;
-    padding: 4px 6px;
+    min-width: 26px;
+    height: 26px;
+    padding: 3px 5px;
 
     &.is-active {
       color: var(--el-color-primary);
@@ -1435,12 +1302,49 @@ defineExpose({
   }
 
   :deep(.el-divider--vertical) {
-    height: 16px;
-    margin: 0 4px;
+    height: 14px;
+    margin: 0 2px;
   }
 }
 
+.toolbar-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 3px 10px;
+  border-right: 1px solid var(--el-border-color-lighter);
+
+  &:last-child {
+    border-right: none;
+  }
+}
+
+.toolbar-group-buttons {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.toolbar-group-label {
+  font-size: 9px;
+  line-height: 1;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+  user-select: none;
+}
+
 .editor-content {
+  position: relative;
+
+  .content-expand-btn {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 10;
+  }
+
   :deep(.tiptap) {
     min-height: 100%;
     padding: 12px 16px;

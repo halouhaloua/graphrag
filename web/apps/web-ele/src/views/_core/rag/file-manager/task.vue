@@ -202,9 +202,11 @@ async function handleComplexOcr() {
             :stream-url="streamUrl"
             :ocr-status="ocrStatus"
             :llm-status="llmStatus"
+            :sidebar-collapsed="sidebarCollapsed"
             :card="true"
             @ocr="handleOcr"
             @complex-ocr="handleComplexOcr"
+            @expand-sidebar="sidebarCollapsed = false"
           />
 
           <template v-if="activeNav === 'edit'">
@@ -213,9 +215,11 @@ async function handleComplexOcr() {
                 v-model="textContent"
                 :max-height="99999"
                 :show-word-count="true"
+                :sidebar-collapsed="sidebarCollapsed"
                 :toolbar-config="{ groups: ['save', 'history', 'heading', 'format', 'color', 'align', 'list', 'insert', 'blockquote', 'code', 'divider', 'clear'] }"
                 placeholder="暂无文本内容，请手动输入或使用识别功能提取文字..."
                 @save="handleSave"
+                @expand-sidebar="sidebarCollapsed = false"
               />
             </div>
           </template>
@@ -226,9 +230,11 @@ async function handleComplexOcr() {
               :stream-url="streamUrl"
               :ocr-status="ocrStatus"
               :llm-status="llmStatus"
+              :sidebar-collapsed="sidebarCollapsed"
               :card="false"
               @ocr="handleOcr"
               @complex-ocr="handleComplexOcr"
+              @expand-sidebar="sidebarCollapsed = false"
             />
             <div class="split-divider" />
             <div class="split-right">

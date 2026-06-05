@@ -105,7 +105,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown));
             :stream-url="streamUrl"
             :ocr-status="'none'"
             :llm-status="'none'"
+            :sidebar-collapsed="sidebarCollapsed"
             :card="true"
+            @expand-sidebar="sidebarCollapsed = false"
           />
 
           <template v-if="activeNav === 'edit'">
@@ -114,9 +116,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown));
                 v-model="textContent"
                 :max-height="99999"
                 :show-word-count="true"
+                :sidebar-collapsed="sidebarCollapsed"
                 :toolbar-config="{ groups: ['save', 'history', 'heading', 'format', 'color', 'align', 'list', 'insert', 'blockquote', 'code', 'divider', 'clear'] }"
                 placeholder="暂无文本内容，请手动输入..."
                 @save="handleSave"
+                @expand-sidebar="sidebarCollapsed = false"
               />
             </div>
           </template>
@@ -127,7 +131,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown));
               :stream-url="streamUrl"
               :ocr-status="'none'"
               :llm-status="'none'"
+              :sidebar-collapsed="sidebarCollapsed"
               :card="false"
+              @expand-sidebar="sidebarCollapsed = false"
             />
             <div class="split-divider" />
             <div class="split-right">

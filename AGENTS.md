@@ -341,7 +341,7 @@ New features must include adequate unit tests. Critical logic should have integr
 
 ### [MUST] Comment & docstring language
 
-Write all comments and docstrings in **English**.
+Write all comments and docstrings in **Chinese**.
 
 All public classes and methods must have a full docstring following this template:
 

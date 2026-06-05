@@ -16,7 +16,7 @@ import pathlib
 # ========== 策略常量 ==========
 METHOD_DBSCAN = "dbscan"
 METHOD_GAP = "gap"
-COMPLEX_OCR_BATCH = 20
+COMPLEX_OCR_BATCH = 24
 MAX_IMAGE_PX = 1440
 BATCH_SIZE = 100
 detection_model = pathlib.Path(__file__).parent.parent.parent.parent / ".paddlex/official_models/PP-OCRv5_server_det_safetensors"
@@ -43,7 +43,7 @@ def _get_ocr_engine():
         use_textline_orientation=False,
         engine="transformers",
         device=_device,
-        # text_recognition_batch_size = 6, # batch size
+        text_recognition_batch_size = 6, # batch size
     )
     return _ocr_engine
 

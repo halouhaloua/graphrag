@@ -50,7 +50,7 @@ prompts = {
      input chunk:
      {chunk}
      ```
-    Example Output:{{
+    Example Output(Use the same language as chunk):{{
         "attributes": {{
             "Stephen King": ["profession: author"],
             "Shawshank Redemption": ["type: movie"],
@@ -127,7 +127,7 @@ prompts = {
      input chunk:
      {chunk}
      ```
-    Example Output(Return ONLY the JSON object. No other text.):{{
+    Example Output(Return ONLY the JSON object. No other text.Use the same language as chunk):{{
         "attributes": {{
             "Stephen King": ["profession: author"],
             "Shawshank Redemption": ["type: movie"],

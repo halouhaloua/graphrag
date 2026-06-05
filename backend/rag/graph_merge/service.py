@@ -161,6 +161,62 @@ async def _merge_kb_graphs_service_impl(kb_id: str, db: AsyncSession) -> Dict:
     if not files_with_graph:
         raise ValueError("知识库中没有已构建图谱的文件（不含已合并的虚拟文件）")
 
+    kb_result = await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))
+    kb = kb_result.scalar_one_or_none()
+    virtual = await _get_or_create_virtual_file(kb_id, db, kb.name if kb else "")
+
+    # ── 只有一个文件时直接复制图谱数据，跳过昂贵的合并+社区检测 ──
+    if len(files_with_graph) == 1:
+        single = files_with_graph[0]
+        kg = await KnowledgeGraphService.get_by_file(db, single.id)
+        if not kg:
+            raise ValueError(f"文件 {single.id} 的图谱数据不存在")
+
+        merged_graph_data = kg.graph_data if isinstance(kg.graph_data, list) else (
+            list(kg.graph_data) if kg.graph_data else []
+        )
+        merged_chunks = kg.chunks_data or {}
+
+        graph = load_graph_from_json_data(merged_graph_data) if merged_graph_data else nx.MultiDiGraph()
+        community_count = sum(
+            1 for _, d in graph.nodes(data=True) if d.get("label") == "community"
+        )
+
+        existing_kg = await KnowledgeGraphService.get_by_file(db, virtual.id)
+        if existing_kg:
+            existing_kg.graph_data = merged_graph_data
+            existing_kg.chunks_data = merged_chunks
+        else:
+            from app.base_model import generate_nanoid
+
+            kg_record = KGraphModel(
+                id=generate_nanoid(),
+                file_id=virtual.id,
+                graph_data=merged_graph_data,
+                chunks_data=merged_chunks,
+            )
+            db.add(kg_record)
+            await db.flush()
+            await db.refresh(kg_record)
+
+        virtual.has_graph = True
+        await db.flush()
+
+        logger.info(
+            f"KB {kb_id} single-file graph copied to virtual file {virtual.id}: "
+            f"{graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges, "
+            f"{community_count} communities"
+        )
+
+        return {
+            "virtual_file_id": virtual.id,
+            "community_count": community_count,
+            "total_nodes": graph.number_of_nodes(),
+            "total_edges": graph.number_of_edges(),
+            "file_count": 1,
+        }
+
+    # ── 多个文件走完整合并 ──
     all_graph_data: List[Dict] = []
     all_chunks: Dict[str, Any] = {}
     for f in files_with_graph:
@@ -182,10 +238,6 @@ async def _merge_kb_graphs_service_impl(kb_id: str, db: AsyncSession) -> Dict:
     )
 
     merged_graph_data = result["merged_graph_data"]
-
-    kb_result = await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))
-    kb = kb_result.scalar_one_or_none()
-    virtual = await _get_or_create_virtual_file(kb_id, db, kb.name if kb else "")
 
     existing_kg = await KnowledgeGraphService.get_by_file(db, virtual.id)
     if existing_kg:

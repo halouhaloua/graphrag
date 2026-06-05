@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onErrorCaptured, ref } from 'vue';
 import { ElButton } from 'element-plus';
+import { PanelRight } from '@vben/icons';
 
 import VueOfficePdf from '@vue-office/pdf';
 import VueOfficeDocx from '@vue-office/docx';
@@ -11,11 +12,13 @@ const props = defineProps<{
   ocrStatus: string;
   llmStatus: string;
   card: boolean;
+  sidebarCollapsed?: boolean;
 }>();
 
 defineEmits<{
   ocr: [];
   'complex-ocr': [];
+  expandSidebar: [];
 }>();
 
 const isPdf = computed(() => props.fileExt === 'pdf');
@@ -57,6 +60,14 @@ onErrorCaptured((err) => {
 <template>
   <div :class="card ? 'preview-card' : 'flat-wrapper'">
     <div class="action-bar">
+      <ElButton
+        v-if="sidebarCollapsed"
+        :icon="PanelRight"
+        circle
+        size="small"
+        class="sidebar-expand-btn"
+        @click="$emit('expandSidebar')"
+      />
       <div class="action-buttons">
         <ElButton
           size="small"
@@ -145,7 +156,7 @@ onErrorCaptured((err) => {
 .action-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   padding: 10px 16px;
   background: #ffffff;
   flex-shrink: 0;
@@ -154,6 +165,10 @@ onErrorCaptured((err) => {
   border-bottom: 1px solid #e4e7eb;
   z-index: 10;
   min-height: 46px;
+}
+
+.sidebar-expand-btn {
+  flex-shrink: 0;
 }
 
 .action-buttons {

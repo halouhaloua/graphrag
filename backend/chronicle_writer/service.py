@@ -1,4 +1,3 @@
-import asyncio
 import json
 from typing import AsyncGenerator
 
@@ -22,11 +21,26 @@ from chronicle_writer.model import ChronicleProject
 from app.base_model import generate_nanoid
 
 
+_NODE_LABELS: dict[str, str] = {
+    "plan_project": "篇目规划",
+    "decompose_only": "主题分解",
+    "retrieve_aspect": "方面检索",
+    "verify_evidence": "史料考证",
+    "filter_relevance": "相关度审校",
+    "write_sections_coord": "撰写准备",
+    "write_section": "逐节撰写",
+    "generate_appendix": "图表凡例",
+    "compile_document": "统稿合成",
+    "review_document": "校审核对",
+    "quality_check": "质检归档",
+    "finalize": "最终交付",
+}
+
+
 class ChronicleChatService:
     """基于主智能体的志书写作对话服务"""
 
     _graph = build_chronicle_graph()
-    _decision_futures: dict[str, asyncio.Future] = {}
 
     def __init__(self):
         self._last_state = None
@@ -39,31 +53,6 @@ class ChronicleChatService:
         init_tools(lambda: AsyncSessionLocal())
         set_active_kb_ids(req.kb_ids)
 
-        # 处理中断决策（来自另一路 POST /chat）
-        if req.interrupt_decision and req.conversation_id:
-            pid = req.conversation_id
-            future = self._decision_futures.get(pid)
-            if future and not future.done():
-                future.set_result(
-                    {
-                        "action": req.interrupt_decision.action,
-                        "override_data": req.interrupt_decision.override_data,
-                    }
-                )
-            else:
-                # Future 还不存在 → 创建一个已完成的 Future 兼容竞态
-                f = asyncio.get_event_loop().create_future()
-                f.set_result(
-                    {
-                        "action": req.interrupt_decision.action,
-                        "override_data": req.interrupt_decision.override_data,
-                    }
-                )
-                self._decision_futures[pid] = f
-            yield {"type": "decision_received", "message": "决策已提交"}
-            return
-
-        # 创建主智能体
         agent = create_main_agent()
         msg = UserMsg(name="user", content=req.question)
 
@@ -71,11 +60,9 @@ class ChronicleChatService:
         _done_yielded = False
 
         async for event in agent.reply_stream(msg):
-            # ① 对话文本流 → SSE token
             if isinstance(event, TextBlockDeltaEvent) and event.delta:
                 yield {"type": "token", "text": event.delta}
 
-            # ② ChronicleWriteTool 被调用 → 外部执行 LangGraph 工作流
             elif isinstance(event, RequireExternalExecutionEvent):
                 for tc in event.tool_calls:
                     yield {
@@ -97,7 +84,6 @@ class ChronicleChatService:
                     ):
                         yield wf_event
 
-                    # 工作流完成 → 恢复智能体
                     result_event = ExternalExecutionResultEvent(
                         reply_id=event.reply_id,
                         execution_results=[
@@ -126,7 +112,6 @@ class ChronicleChatService:
                     yield await self._build_done_event(project_id)
                     _done_yielded = True
 
-            # ③ ReplyEnd → 结束 SSE（无工具调用的普通对话、或工具调用后的第二轮 reply）
             elif isinstance(event, ReplyEndEvent):
                 if not _done_yielded:
                     yield {"type": "done", "content": ""}
@@ -154,7 +139,17 @@ class ChronicleChatService:
         config: dict,
         kb_ids: list[str],
     ) -> AsyncGenerator[dict, None]:
-        """执行 LangGraph 工作流，逐阶段 yield SSE 事件"""
+        """执行 LangGraph 工作流，逐阶段 yield SSE 事件。
+
+        使用 astream_events + asyncio.Queue 实现：
+        - 节点边界（node_start/node_end）即时推送
+        - write_section_node 内的 token 通过 event_queue 实时推送
+        - 非 token 的 pending_events 在节点完成时通过 astream_events 推送
+        """
+        import asyncio
+
+        from chronicle_writer.event_queue import init_queue, clear_queue
+
         set_active_kb_ids(kb_ids)
 
         state = ChronicleWritingState(
@@ -170,13 +165,17 @@ class ChronicleChatService:
             status_message="开始写作...",
             outline=[],
             editorial_notes="",
-            research_data={},
-            global_facts=[],
+            aspects=[],
+            _aspect_names=[],
+            _aspect_queries={},
+            _aspect_idx=0,
             verified_data={},
             contradictions=[],
-            human_decision=None,
+            filtered_data={},
+            removed_items=[],
             sections={},
             section_order=[],
+            _section_idx=0,
             current_section_idx=0,
             appendix_data={},
             review_results=[],
@@ -186,33 +185,83 @@ class ChronicleChatService:
             iteration_count=0,
             max_iterations=3,
             errors=[],
+            report="",
             pending_events=[],
         )
 
-        thread = {"configurable": {"thread_id": project_id}}
-        config_lg = {"recursion_limit": 50}
+        thread = {
+            "configurable": {"thread_id": project_id, "recursion_limit": 50},
+        }
 
         self._last_state = state
 
+        queue: asyncio.Queue = asyncio.Queue()
+        init_queue(queue)
+
+        async def _run_graph():
+            _emitted = 0
+            try:
+                async for event in self._graph.astream_events(
+                    state, thread, version="v2"
+                ):
+                    kind = event["event"]
+                    name = event["name"]
+                    data = event.get("data", {})
+
+                    if kind == "on_chain_start" and name in _NODE_LABELS:
+                        label = _NODE_LABELS.get(name, name)
+                        await queue.put(
+                            {
+                                "type": "node_start",
+                                "node": name,
+                                "label": label,
+                            }
+                        )
+
+                    elif kind == "on_chain_stream" and name in _NODE_LABELS:
+                        chunk = data.get("chunk") or {}
+                        if isinstance(chunk, dict):
+                            pending = chunk.get("pending_events") or []
+                            for p in pending[_emitted:]:
+                                await queue.put(p)
+                            _emitted = len(pending)
+                            self._last_state = chunk
+
+                    elif kind == "on_chain_end" and name in _NODE_LABELS:
+                        label = _NODE_LABELS.get(name, name)
+                        output = data.get("output") or {}
+                        progress = (
+                            output.get("progress", 0) if isinstance(output, dict) else 0
+                        )
+                        await queue.put(
+                            {
+                                "type": "node_end",
+                                "node": name,
+                                "label": label,
+                                "progress": progress,
+                            }
+                        )
+            except Exception as e:
+                logger.error(f"Workflow failed: {e}")
+                await queue.put({"type": "error", "message": str(e)})
+            finally:
+                await queue.put(None)  # sentinel
+
+        task = asyncio.create_task(_run_graph())
+
         try:
-            async for update in self._graph.astream(state, thread, config=config_lg):
-                self._last_state = update
-                events = update.get("pending_events", [])
-                for event in events:
-                    yield event
-                    if event["type"] == "interrupt":
-                        yield {
-                            "type": "status",
-                            "stage": "waiting_human",
-                            "progress": 0.35,
-                            "message": "等待主编复核矛盾",
-                        }
-                        decision = await self._wait_for_decision(project_id)
-                        state["human_decision"] = decision
-                        break
-        except Exception as e:
-            logger.error(f"Workflow failed: {e}")
-            yield {"type": "error", "message": str(e)}
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                yield event
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            clear_queue()
 
     async def _build_done_event(self, project_id: str) -> dict:
         state = self._last_state or {}
@@ -232,17 +281,5 @@ class ChronicleChatService:
             "content": full_content,
             "sections": sections,
             "section_order": section_order,
+            "report": state.get("report", ""),
         }
-
-    async def _wait_for_decision(self, project_id: str) -> dict:
-        future = self._decision_futures.get(project_id)
-        if future is None or future.done():
-            future = asyncio.get_event_loop().create_future()
-            self._decision_futures[project_id] = future
-        try:
-            decision = await asyncio.wait_for(future, timeout=300)
-            self._decision_futures.pop(project_id, None)
-            return decision
-        except asyncio.TimeoutError:
-            self._decision_futures.pop(project_id, None)
-            return {"action": "override"}
