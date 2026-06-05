@@ -10,6 +10,7 @@ from rag.file_manager.ocr import (
     METHOD_GAP,
     _is_garbled,
     _is_vertical_layout,
+    _reconstruct_horizontal_layout,
     _reconstruct_vertical_layout,
     _reconstruct_vertical_layout_dbscan,
     _reconstruct_vertical_layout_gap,
@@ -48,12 +49,6 @@ class TestReconstructVerticalLayoutDbscan:
     def test_empty_returns_empty(self):
         assert _reconstruct_vertical_layout_dbscan([], []) == ""
 
-    def test_single_line_horizontal(self):
-        texts = ["hello world"]
-        polys = [[(0, 0), (100, 0), (100, 20), (0, 20)]]
-        result = _reconstruct_vertical_layout_dbscan(texts, polys, is_vertical=False)
-        assert "hello world" in result
-
     def test_multiple_columns_vertical(self):
         texts = ["col2a", "col2b", "col1a", "col1b"]
         polys = [
@@ -64,72 +59,98 @@ class TestReconstructVerticalLayoutDbscan:
         ]
         result = _reconstruct_vertical_layout_dbscan(texts, polys, is_vertical=True)
         lines = result.strip().split('\n')
-        # Right column first (col2), then left column (col1)
         assert len(lines) >= 2
         assert "col2" in lines[0]
         assert "col1" in lines[1]
-
-    def test_multiple_columns_horizontal(self):
-        texts = ["left", "right"]
-        polys = [
-            box(0, 0, 100, 0, 100, 20, 0, 20),
-            box(200, 0, 300, 0, 300, 20, 200, 20),
-        ]
-        result = _reconstruct_vertical_layout_dbscan(texts, polys, is_vertical=False)
-        lines = result.strip().split('\n')
-        assert len(lines) >= 2
-        assert lines[0] == "left"
-        assert lines[1] == "right"
 
 
 class TestReconstructVerticalLayoutGap:
     def test_empty_returns_empty(self):
         assert _reconstruct_vertical_layout_gap([], []) == ""
 
-    def test_single_column(self):
-        texts = ["a", "b"]
+    def test_two_columns_vertical(self):
+        texts = ["col2a", "col2b", "col1a", "col1b"]
         polys = [
-            box(0, 0, 50, 0, 50, 20, 0, 20),
-            box(0, 30, 50, 30, 50, 50, 0, 50),
+            box(200, 0, 230, 0, 230, 50, 200, 50),
+            box(210, 60, 240, 60, 240, 110, 210, 110),
+            box(0, 0, 30, 0, 30, 50, 0, 50),
+            box(10, 60, 40, 60, 40, 110, 10, 110),
         ]
-        result = _reconstruct_vertical_layout_gap(texts, polys, is_vertical=False)
+        result = _reconstruct_vertical_layout_gap(texts, polys, is_vertical=True)
         lines = result.strip().split('\n')
-        assert len(lines) == 1
-        assert "ab" in lines[0]
+        assert len(lines) >= 2
+        assert "col2" in lines[0]
+        assert "col1" in lines[1]
 
-    def test_two_columns_with_gap(self):
-        texts = ["col1a", "col1b", "col2a", "col2b"]
-        polys = [
-            box(0, 0, 50, 0, 50, 20, 0, 20),
-            box(5, 30, 55, 30, 55, 50, 5, 50),
-            box(300, 0, 350, 0, 350, 20, 300, 20),
-            box(305, 30, 355, 30, 355, 50, 305, 50),
-        ]
-        result = _reconstruct_vertical_layout_gap(texts, polys, is_vertical=False)
-        lines = result.strip().split('\n')
-        assert len(lines) == 2
-        assert "col1" in lines[0]
-        assert "col2" in lines[1]
+
+class TestReconstructHorizontalLayout:
+    def test_empty_returns_empty(self):
+        assert _reconstruct_horizontal_layout([], []) == ""
+
+    def test_single_text(self):
+        assert _reconstruct_horizontal_layout(
+            ["hello"], [[(0, 0), (100, 0), (100, 20), (0, 20)]]
+        ) == "hello"
+
+    def test_single_column_two_rows(self):
+        assert _reconstruct_horizontal_layout(
+            ["hello", "world"],
+            [[(0, 0), (100, 0), (100, 20), (0, 20)],
+             [(0, 50), (100, 50), (100, 70), (0, 70)]],
+        ) == "hello world"
+
+    def test_dual_column(self):
+        assert _reconstruct_horizontal_layout(
+            ["left1", "right1", "left2", "right2", "left3", "right3"],
+            [box(0, 0, 80, 0, 80, 20, 0, 20),
+             box(200, 0, 280, 0, 280, 20, 200, 20),
+             box(0, 50, 80, 50, 80, 70, 0, 70),
+             box(200, 50, 280, 50, 280, 70, 200, 70),
+             box(0, 100, 80, 100, 80, 120, 0, 120),
+             box(200, 100, 280, 100, 280, 120, 200, 120)],
+        ) == "left1 left2 left3\nright1 right2 right3"
+
+    def test_mixed_single_then_dual(self):
+        assert _reconstruct_horizontal_layout(
+            ["标题跨栏", "摘要跨栏",
+             "左一", "右一", "左二", "右二", "左三", "右三"],
+            [box(20, 10, 180, 10, 180, 30, 20, 30),
+             box(20, 40, 180, 40, 180, 60, 20, 60),
+             box(0, 80, 60, 80, 60, 100, 0, 100),
+             box(140, 80, 200, 80, 200, 100, 140, 100),
+             box(0, 110, 60, 110, 60, 130, 0, 130),
+             box(140, 110, 200, 110, 200, 130, 140, 130),
+             box(0, 140, 60, 140, 60, 160, 0, 160),
+             box(140, 140, 200, 140, 200, 160, 140, 160)],
+        ) == "标题跨栏 摘要跨栏\n左一 左二 左三\n右一 右二 右三"
+
+    def test_skips_empty_text(self):
+        assert _reconstruct_horizontal_layout(
+            ["hello", "", "world"],
+            [[(0, 0), (100, 0), (100, 20), (0, 20)],
+             [(0, 10), (100, 10), (100, 30), (0, 30)],
+             [(0, 50), (100, 50), (100, 70), (0, 70)]],
+        ) == "hello world"
 
 
 class TestReconstructVerticalLayout:
-    def test_dispatches_dbscan(self):
-        texts = ["hello"]
-        polys = [[(0, 0), (100, 0), (100, 20), (0, 20)]]
+    def test_vertical_dispatches_dbscan(self):
+        texts = ["v1", "v2"]
+        polys = [box(0, 0, 30, 0, 30, 200, 0, 200)] * 2
         result = _reconstruct_vertical_layout(texts, polys, method=METHOD_DBSCAN)
-        assert "hello" in result
+        assert "v1" in result and "v2" in result
 
-    def test_dispatches_gap(self):
-        texts = ["hello"]
-        polys = [[(0, 0), (100, 0), (100, 20), (0, 20)]]
+    def test_vertical_dispatches_gap(self):
+        texts = ["v1", "v2"]
+        polys = [box(0, 0, 30, 0, 30, 200, 0, 200)] * 2
         result = _reconstruct_vertical_layout(texts, polys, method=METHOD_GAP)
-        assert "hello" in result
+        assert "v1" in result and "v2" in result
 
-    def test_default_method_is_dbscan(self):
-        texts = ["hello"]
-        polys = [[(0, 0), (100, 0), (100, 20), (0, 20)]]
+    def test_horizontal_dispatches_horizontal_layout(self):
+        texts = ["hello", "world"]
+        polys = [[(0, 0), (100, 0), (100, 20), (0, 20)]] * 2
         result = _reconstruct_vertical_layout(texts, polys)
-        assert "hello" in result
+        assert result == "hello world"
 
 
 class TestConstants:

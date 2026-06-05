@@ -12,7 +12,13 @@ prompts = {
     2. Flexibility: If the context does not fit the predefined schema, extract the valuable knowledge as needed;
     3. Conciseness: The Attributes and Triples you extract should be complementary and no semantic redundancy.
     4. Do NOT miss any useful information in the context;
-    5. Output Format: Return only JSON as **Example Output** with:    
+    5. Quality constraints for triples:
+     - Do NOT extract meaningless single symbols, punctuation marks, standalone numbers, or pure stopwords (e.g., "a", "the", "it", "this") as entities or relations.
+     - Every entity mention and relation phrase must carry concrete semantic meaning within the context.
+     - Avoid extracting triples where either entity is an empty string, a single character, or a meaningless placeholder.
+     - If a numeric value is an important attribute (e.g., "65%", "2013-2022"), treat it as an attribute value, not as a separate entity.
+
+    Output Format: Return only JSON as **Example Output** with:    
      - Attributes: Map each entity to its descriptive features.    
      - Triples: List relations between entities in `[entity_mention1, relation, entity_mention2]` format.  
      - Entity_types: Map each entity to its schema type based on the provided schema.
@@ -62,9 +68,9 @@ prompts = {
             "Frank Darabont": "person"
             }}
         "macro_tags": {{
-            "intent": "对比分析",
-            "topic": "电影改编",
-            "function": "举例说明"
+            "intent": "compare novella with film, illustrate adaptation process",
+            "topic": "Shawshank Redemption, novella-to-film adaptation",
+            "function": "exemplify literary adaptation, give concrete case"
             }},
         }}""",
         # 图构建提示词，演化模式
@@ -78,6 +84,11 @@ prompts = {
     2. Flexibility: If the context does not fit the predefined schema, extract the valuable knowledge as needed;
     3. Conciseness: The Attributes and Triples you extract should be complementary and no semantic redundancy.
     4. Do NOT miss any useful information in the context;
+    5. Quality constraints for triples:
+     - Do NOT extract meaningless single symbols, punctuation marks, standalone numbers, or pure stopwords (e.g., "a", "the", "it", "this") as entities or relations.
+     - Every entity mention and relation phrase must carry concrete semantic meaning within the context.
+     - Avoid extracting triples where either entity is an empty string, a single character, or a meaningless placeholder.
+     - If a numeric value is an important attribute (e.g., "65%", "2013-2022"), treat it as an attribute value, not as a separate entity.
 
     Output Format: Return only JSON as **Example Output** with:
     - Attributes: Map each entity to its descriptive features.

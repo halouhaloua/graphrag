@@ -17,7 +17,7 @@ import pathlib
 METHOD_DBSCAN = "dbscan"
 METHOD_GAP = "gap"
 COMPLEX_OCR_BATCH = 20
-MAX_IMAGE_PX = 960
+MAX_IMAGE_PX = 1440
 BATCH_SIZE = 100
 detection_model = pathlib.Path(__file__).parent.parent.parent.parent / ".paddlex/official_models/PP-OCRv5_server_det_safetensors"
 recognition_model = pathlib.Path(__file__).parent.parent.parent.parent / ".paddlex/official_models/PP-OCRv5_server_rec_safetensors"
@@ -205,16 +205,76 @@ def _is_vertical_layout(dt_polys: list) -> bool:
     return vertical_count > len(dt_polys) // 2
 
 
+# ========== 横排文本排版（单栏/双栏自适应，基于 x 区间归属） ==========
+
+def _reconstruct_horizontal_layout(rec_texts: list, dt_polys: list) -> str:
+    """横排文本排版：基于文本框 x 区间与页面中心线的位置关系判定左/右/跨栏"""
+    items = []
+    for text, box in zip(rec_texts, dt_polys):
+        if not text or not text.strip():
+            continue
+        x1 = min(box[0][0], box[3][0])
+        x2 = max(box[1][0], box[2][0])
+        cy = (box[0][1] + box[2][1]) / 2
+        items.append({"x1": x1, "x2": x2, "cy": cy, "text": text.strip()})
+
+    if not items:
+        return ""
+
+    page_min = min(p["x1"] for p in items)
+    page_max = max(p["x2"] for p in items)
+    page_center = (page_min + page_max) / 2
+
+    lefts, rights, spans = [], [], []
+    for p in items:
+        w = p["x2"] - p["x1"]
+        if w == 0:
+            lefts.append(p)
+            continue
+        left_overlap = max(0, page_center - p["x1"])
+        right_overlap = max(0, p["x2"] - page_center)
+        left_ratio = left_overlap / w
+        right_ratio = right_overlap / w
+
+        if left_ratio >= 0.9:
+            lefts.append(p)
+        elif right_ratio >= 0.9:
+            rights.append(p)
+        else:
+            spans.append(p)
+
+    is_dual = len(lefts) >= 3 and len(rights) >= 3
+
+    if is_dual:
+        spans.sort(key=lambda p: p["cy"])
+        lefts.sort(key=lambda p: p["cy"])
+        rights.sort(key=lambda p: p["cy"])
+
+        parts = []
+        if spans:
+            parts.append(" ".join(p["text"] for p in spans))
+        if lefts:
+            parts.append(" ".join(p["text"] for p in lefts))
+        if rights:
+            parts.append(" ".join(p["text"] for p in rights))
+        return "\n".join(parts)
+
+    result = lefts + rights + spans
+    result.sort(key=lambda p: (p["cy"], (p["x1"] + p["x2"]) / 2))
+    return " ".join(p["text"] for p in result)
+
+
 # ========== 统一列重构入口 ==========
 
 def _reconstruct_vertical_layout(rec_texts: list, dt_polys: list,
                                  method: str = METHOD_DBSCAN) -> str:
-    """根据 method 选择列重构策略，自动检测文字方向"""
-    is_vertical = _is_vertical_layout(dt_polys)
-    separator = "" if is_vertical else " "
+    """根据文字方向选择排版策略"""
+    if not _is_vertical_layout(dt_polys):
+        return _reconstruct_horizontal_layout(rec_texts, dt_polys)
+    separator = ""
     if method == METHOD_GAP:
-        return _reconstruct_vertical_layout_gap(rec_texts, dt_polys, is_vertical=is_vertical, separator=separator)
-    return _reconstruct_vertical_layout_dbscan(rec_texts, dt_polys, is_vertical=is_vertical, separator=separator)
+        return _reconstruct_vertical_layout_gap(rec_texts, dt_polys, is_vertical=True, separator=separator)
+    return _reconstruct_vertical_layout_dbscan(rec_texts, dt_polys, is_vertical=True, separator=separator)
 
 # ========== 图像 OCR（支持策略选择） ==========
 

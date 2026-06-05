@@ -1,19 +1,6 @@
 # ai admin
-
-<div align="center">
-
-[![许可证](https://img.shields.io/badge/许可证-Apache%202.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](backend/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.121+-green.svg)](backend/)
-[![Vue](https://img.shields.io/badge/Vue-3.5+-brightgreen.svg)](web/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](web/)
-
 **一个基于 FastAPI + Vue 3 的全栈企业级低代码/零代码开发平台**
 
-
-</div>
-
-## 🌐 相关链接
 
 - **演示账号**：superadmin
 - **演示密码**：123456
@@ -191,8 +178,8 @@ pnpm dev
    - `JWT_SECRET_KEY` — JWT 签名密钥
    - `DB_PASSWORD` — 数据库密码
    - `REDIS_PASSWORD` — Redis 密码
-2. 默认使用 PostgreSQL，如需切换 MySQL 请修改 `docker-compose.yml` 中的服务配置
-3. 文件存储默认使用 `local` 模式，如需 MinIO/OSS 可在 `.env` 中配置
+
+2. 文件存储默认使用 `local` 模式，如需 MinIO/OSS 可在 `.env` 中配置
 
 
 ## 🏛 项目结构

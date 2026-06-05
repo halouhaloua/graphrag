@@ -100,6 +100,12 @@ python scripts/loaddata.py db_init.json
 
 # Start with uvicorn directly
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# Lint & format (ruff, configured in pyproject.toml)
+ruff check .                       # lint all files
+ruff check --fix .                 # lint + auto-fix
+ruff format .                      # format all files
+ruff format --check .              # check formatting without changes
 ```
 
 ### Creating a new backend module
@@ -128,12 +134,15 @@ pnpm dev                          # starts @vben/web-ele on :5777
 | `pnpm dev` | Dev server (port 5777) |
 | `pnpm build` | Build all packages |
 | `pnpm build:ele` | Build only `@vben/web-ele` |
-| `pnpm lint` | Lint with vsh |
+| `pnpm lint` | Lint with vsh (prettier → eslint → stylelint) |
+| `pnpm format` | Auto-format with prettier via vsh |
+| `pnpm check:circular` | Circular dependency scan |
+| `pnpm check:dep` | Dependency check |
+| `pnpm check:type` | TypeScript typecheck via turbo |
+| `pnpm check:cspell` | Spell check |
 | `pnpm check` | circular → dep check → typecheck → cspell |
-| `pnpm check:type` | TypeScript typecheck (turbo) |
 | `pnpm test:unit` | Vitest unit tests (happy-dom) |
 | `pnpm test:e2e` | Playwright e2e tests |
-| `pnpm format` | Auto-format with prettier |
 | `pnpm commit` | Commit with czg (conventional commits) |
 
 ### App configuration
@@ -296,3 +305,86 @@ When `construction.mode == "agent"`, LLM prompt includes `new_schema_types`. If 
 - No Docker Compose in repo (possibly outside).
 - Avoid committing `.env.*.local` files or secrets (gitignored).
 - Backend sends token to frontend; frontend stores in localStorage under `vben-shared-auth-tokens` for cross-tab sync.
+
+## Code writing standards
+
+### [MUST] Lazy imports
+
+Import third-party dependencies at point of use, not at file top. For base-class imports, prefer factory pattern:
+
+```python
+def get_xxx_cls() -> "MyClass":
+    from xxx import BaseClass
+    class MyClass(BaseClass): ...
+    return MyClass
+```
+
+### [SHOULD] Conciseness
+
+Avoid unnecessary temporary variables. Merge duplicate blocks. Prefer reusing existing utilities.
+
+### [MUST] Encapsulation naming
+
+- Internal module/package files use `_` prefix (e.g. `_internal.py`) and expose via `__init__.py`.
+- Internal-only classes, functions, and variables must use `_` prefix.
+
+### [MUST] Security
+
+- Never hardcode API keys, tokens, passwords, or other secrets.
+- Use environment variables, config center, or secret manager.
+- No debug info, temporary credentials, or test backdoors in committed code.
+- Guard against injection attacks (SQL, command, code injection, etc.).
+
+### [MUST] Tests
+
+New features must include adequate unit tests. Critical logic should have integration or regression test coverage.
+
+### [MUST] Comment & docstring language
+
+Write all comments and docstrings in **English**.
+
+All public classes and methods must have a full docstring following this template:
+
+```python
+def func(a: str, b: int | None = None) -> str:
+    """{description}
+
+    Args:
+        a (`str`):
+            The argument a
+        b (`int | None`, optional):
+            The argument b
+
+    Returns:
+        `str`:
+            The return str
+    """
+```
+
+Special content may use reStructuredText or compatible doc syntax:
+
+```python
+class MyClass:
+    """Example class.
+
+    `Example link <https://xxx>`_
+
+    .. note:: Example note
+
+    .. tip:: Example tip
+
+    .. important:: Example important info
+
+    .. code-block:: python
+
+        def hello_world():
+            print("Hello world!")
+
+    """
+```
+
+### [MUST] Pre-commit compliance
+
+- Fix code to meet lint/typecheck requirements rather than skipping checks.
+- Never suppress checks at file level.
+- Only allowed exception: formatting constraints from system prompt parameters (e.g. avoiding `\n` auto-escaping).
