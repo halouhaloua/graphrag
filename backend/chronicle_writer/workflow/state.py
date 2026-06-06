@@ -6,6 +6,7 @@ class ChronicleWritingState(TypedDict):
 
     # 项目标识
     project_id: str
+    conversation_id: str
     project_title: str
     chronicle_type: str
     region_name: str
@@ -76,6 +77,9 @@ class ChronicleWritingState(TypedDict):
 
     # 总体报告（累计流程日志 + 审计日志）
     report: str
+
+    # 可展开的详细报告（检索移除原因、矛盾详情、审查明细）
+    report_details: list[dict]
 
     # SSE 事件队列
     pending_events: list[dict]

@@ -46,6 +46,8 @@ export function useAiWriter() {
     kbIds.value.length > 0 ? `知识库(${kbIds.value.length}个)` : '',
   );
 
+
+
   function setKbIds(ids: string[]) {
     kbIds.value = ids;
   }
@@ -214,11 +216,14 @@ export function useAiWriter() {
           kb_ids: kbIds.value,
         }, {
           onToken: (token) => { getMsg().content += token; },
-          onDone: (fullText, returnedConvId) => {
+          onDone: (fullText, returnedConvId, extra) => {
             const msg = getMsg();
             msg.content = fullText || msg.content;
             msg.streaming = false;
             if (returnedConvId) currentConvId.value = returnedConvId;
+            if (extra?.report) (msg as any).report = extra.report;
+            if (extra?.report_details) (msg as any).report_details = extra.report_details;
+            if (extra?.kg_data) (msg as any).kg_data = extra.kg_data;
             fetchConversations();
           },
           onError: (err) => {

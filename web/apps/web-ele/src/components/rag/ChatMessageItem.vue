@@ -11,6 +11,8 @@ export interface AiMessage {
   role: 'user' | 'assistant';
   content: string;
   streaming?: boolean;
+  report?: string;
+  report_details?: { summary: string; details?: string[] }[];
 }
 
 const props = defineProps<{
@@ -56,10 +58,49 @@ onBeforeUnmount(() => {
   if (throttleTimer) clearTimeout(throttleTimer);
 });
 
+const kgExpanded = ref(false);
+
+const kgData = computed(() => (props.message as any).kg_data);
+
+const kgAllTriples = computed(() => {
+  if (!kgData.value?.aspects) return [];
+  return kgData.value.aspects.flatMap((a: any) => a.triples || []);
+});
+
+const kgAllChunks = computed(() => {
+  if (!kgData.value?.aspects) return [];
+  return kgData.value.aspects.flatMap((a: any) => a.chunks || []);
+});
+
 const renderedHTML = computed(() => {
   if (!displayContent.value) return '';
   return marked.parse(displayContent.value, { breaks: true }) as string;
 });
+
+const reportItems = ref<{ summary: string; details?: string[]; _expanded: boolean }[]>([]);
+
+watch(
+  () => (props.message as any).report_details,
+  (val) => {
+    if (val && Array.isArray(val)) {
+      reportItems.value = val.map((item: any) => ({
+        summary: item.summary,
+        details: item.details,
+        _expanded: false,
+      }));
+    } else {
+      reportItems.value = [];
+    }
+  },
+  { immediate: true },
+);
+
+function toggleReportItem(idx: number) {
+  const item = reportItems.value[idx];
+  if (item) {
+    item._expanded = !item._expanded;
+  }
+}
 
 function copyContent(content: string) {
   navigator.clipboard.writeText(content).then(
@@ -78,6 +119,67 @@ function copyContent(content: string) {
     </template>
     <template v-else>
       <div class="assistant-content">
+        <div v-if="message.report || kgData" class="report-block">
+          <template v-if="reportItems.length">
+            <div
+              v-for="(item, i) in reportItems"
+              :key="i"
+              class="report-item"
+              @click="toggleReportItem(i)"
+            >
+              <div class="report-summary">
+                <span class="report-arrow">{{ item._expanded ? '▼' : '▶' }}</span>
+                <span>{{ item.summary }}</span>
+              </div>
+              <div v-if="item._expanded && item.details?.length" class="report-details">
+                <div v-for="(d, j) in item.details" :key="j" class="report-detail-line">
+                  ─ {{ d }}
+                </div>
+              </div>
+            </div>
+          </template>
+          <pre v-if="reportItems.length === 0 && message.report">{{ message.report }}</pre>
+          <div
+            v-if="kgData"
+            class="kg-header"
+            @click="kgExpanded = !kgExpanded"
+          >
+            <span class="report-arrow">{{ kgExpanded ? '▼' : '▶' }}</span>
+            <span>
+              [检索] {{ kgData.aspects?.length || 0 }}个方面
+              {{ kgAllTriples.length }}条三元组
+              {{ kgAllChunks.length }}段原文
+            </span>
+          </div>
+          <div v-if="kgExpanded && kgData" class="kg-body">
+            <div class="kg-tags">
+              <el-tag size="small" type="info">{{ kgData.aspects?.length || 0 }} 个方面</el-tag>
+              <el-tag size="small" type="warning">{{ kgAllTriples.length }} 条三元组</el-tag>
+              <el-tag size="small" type="success">{{ kgAllChunks.length }} 段原文</el-tag>
+            </div>
+            <div
+              v-for="(aspect, ai) in kgData.aspects"
+              :key="ai"
+              class="kg-aspect"
+            >
+              <div class="kg-aspect-title">{{ aspect.name }}</div>
+              <div v-if="aspect.triples?.length" class="kg-triples">
+                <div
+                  v-for="(t, ti) in aspect.triples"
+                  :key="ti"
+                  class="triple-item"
+                >{{ t }}</div>
+              </div>
+              <div v-if="aspect.chunks?.length" class="kg-chunks">
+                <div
+                  v-for="(c, ci) in aspect.chunks"
+                  :key="ci"
+                  class="chunk-item"
+                >{{ c }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="md-content" v-html="renderedHTML"></div>
         <div
           v-if="message.role === 'assistant' && !message.streaming"
@@ -149,6 +251,130 @@ function copyContent(content: string) {
 .assistant-content {
   position: relative;
   max-width: 85%;
+}
+
+.report-block {
+  margin: 0 0 12px 16px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--el-border-color);
+  background: var(--el-fill-color-lighter);
+  border-radius: 0 6px 6px 0;
+}
+
+.report-block pre {
+  margin: 0;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.report-item {
+  cursor: pointer;
+  margin-bottom: 2px;
+}
+
+.report-item:last-child {
+  margin-bottom: 0;
+}
+
+.report-summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--el-text-color-secondary);
+}
+
+.report-summary:hover {
+  color: var(--el-text-color-primary);
+}
+
+.report-arrow {
+  flex-shrink: 0;
+  width: 12px;
+  font-size: 10px;
+  color: var(--el-text-color-placeholder);
+}
+
+.report-details {
+  padding: 4px 0 4px 16px;
+}
+
+.report-detail-line {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-placeholder);
+  padding: 1px 0;
+}
+
+.kg-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 0;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--el-text-color-secondary);
+}
+
+.kg-header:hover {
+  color: var(--el-text-color-primary);
+}
+
+.kg-body {
+  padding: 0 0 8px;
+}
+
+.kg-tags {
+  display: flex;
+  gap: 6px;
+  padding: 4px 0 8px;
+}
+
+.kg-aspect {
+  margin-bottom: 12px;
+}
+
+.kg-aspect:last-child {
+  margin-bottom: 0;
+}
+
+.kg-aspect-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--el-border-color-light);
+  margin-bottom: 6px;
+}
+
+.kg-triples {
+  margin-bottom: 6px;
+}
+
+.triple-item {
+  padding: 4px 8px;
+  margin-bottom: 2px;
+  font-family: monospace;
+  font-size: 12px;
+  background: var(--el-fill-color);
+  border-radius: 4px;
+  color: var(--el-text-color-regular);
+  word-break: break-all;
+}
+
+.chunk-item {
+  padding: 6px 8px;
+  margin-bottom: 2px;
+  font-size: 12px;
+  background: var(--el-fill-color);
+  border-radius: 4px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.5;
 }
 
 .assistant-actions {

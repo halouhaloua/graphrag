@@ -835,13 +835,74 @@ export interface ChronicleChatRequest {
   interrupt_decision?: ChronicleInterruptDecision;
 }
 
+// ─── 项目详情 ───
+
+export interface SectionNode {
+  id: string;
+  title: string;
+  level: number;
+  sort_order: number;
+  content: string;
+  word_count: number;
+  status: string;
+  children: SectionNode[];
+}
+
+export interface ReviewItem {
+  id: string;
+  section_id: string | null;
+  review_type: string;
+  severity: string;
+  issue: string;
+  suggestion: string | null;
+  resolved: boolean;
+}
+
+export interface LogEntry {
+  stage: string;
+  event_type: string;
+  message: string | null;
+  created_at: string;
+}
+
+export interface ProjectDetail {
+  id: string;
+  title: string;
+  chronicle_type: string;
+  region_name: string | null;
+  scope_description: string | null;
+  status: string;
+  word_count: number;
+  report: string | null;
+  conversation_id: string | null;
+  sections: SectionNode[];
+  review_summary: Record<string, number>;
+  created_at: string;
+}
+
+export function getChronicleProjectApi(projectId: string): Promise<ProjectDetail> {
+  return requestClient.get(`/api/chronicle/project/${projectId}`);
+}
+
+export function getChronicleSectionsApi(projectId: string): Promise<{ items: SectionNode[]; total: number }> {
+  return requestClient.get(`/api/chronicle/project/${projectId}/sections`);
+}
+
+export function getChronicleReviewsApi(projectId: string): Promise<{ items: ReviewItem[]; total: number }> {
+  return requestClient.get(`/api/chronicle/project/${projectId}/reviews`);
+}
+
+export function getChronicleLogApi(projectId: string): Promise<{ items: LogEntry[]; total: number }> {
+  return requestClient.get(`/api/chronicle/project/${projectId}/log`);
+}
+
 export async function chronicleChatStream(
   data: ChronicleChatRequest,
   callbacks?: {
     onToken?: (token: string) => void;
     onStatus?: (stage: string, progress: number, message: string) => void;
     onInterrupt?: (data: any) => void;
-    onDone?: (fullText: string, convId?: string) => void;
+    onDone?: (fullText: string, convId?: string, extra?: { project_id?: string; report?: string; report_details?: any[]; kg_data?: any }) => void;
     onError?: (error: Error) => void;
   },
 ) {
@@ -858,7 +919,16 @@ export async function chronicleChatStream(
           callbacks?.onInterrupt?.(event);
           break;
         case 'done':
-          callbacks?.onDone?.(event.content ?? '', event.conversation_id);
+          callbacks?.onDone?.(
+            event.content ?? '',
+            event.conversation_id,
+            {
+              project_id: event.project_id,
+              report: event.report,
+              report_details: event.report_details,
+              kg_data: event.kg_data,
+            },
+          );
           break;
         case 'error':
           callbacks?.onError?.(new Error(event.message));

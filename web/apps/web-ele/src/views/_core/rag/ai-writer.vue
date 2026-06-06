@@ -292,7 +292,211 @@ function handleNewConversation() {
   showEditor.value = false;
 }
 
+function _buildDemoMessages() {
+  const report = [
+    '[规划] 篇目规划完成: 共 7 节',
+    '[检索] 主题分解: 拆解为 5 个方面（建置沿革、农业经济、工业发展、人口民族、文化教育）',
+    '[检索]   建置沿革: 召回 12 条，保留 10 条，移除 2 条',
+    '[检索]   农业经济: 召回 18 条，保留 15 条，移除 3 条',
+    '[检索]   工业发展: 召回 8 条，保留 8 条',
+    '[检索]   人口民族: 召回 6 条，保留 5 条，移除 1 条',
+    '[检索]   文化教育: 召回 10 条，保留 8 条，移除 2 条',
+    '[验证] 验证 46 条，发现 1 处矛盾',
+    '[审校] 相关度终审完成: 保留 44 条，移除 2 条',
+    '[撰写] 共撰写 7 节，总计 12600 字',
+    '[统稿] 统稿合成完成',
+    '[审查] 审查发现 4 个问题',
+    '[质检] 质检评分: 0.85',
+    '[完成] 志书生成完毕',
+  ].join('\n');
+  const reportDetails = [
+    {
+      summary: '[检索] 建置沿革: 移除 2 条',
+      details: ['移除: (龙华镇, 气候类型, 亚热带季风) — 与建置沿革主题无关[score: 0.32]', '移除: (龙华镇, 土壤类型, 红壤) — 属于自然环境方面而非建置沿革[score: 0.28]'],
+    },
+    {
+      summary: '[检索] 农业经济: 移除 3 条',
+      details: ['移除: (龙华镇, 工业总产值, 5.6亿元) — 属于工业发展方面[score: 0.15]', '移除: (龙华镇, 学校数量, 11所) — 属于文化教育方面[score: 0.20]', '移除: (龙华镇, 人口密度, 153人/km²) — 属于人口民族方面[score: 0.35]'],
+    },
+    {
+      summary: '[验证] 发现 1 处矛盾',
+      details: ['矛盾: 农业产值数据不一致 — 本志记载3.2亿元，统计年鉴显示3.15亿元，差异约500万元'],
+    },
+    {
+      summary: '[审查] 发现 4 个问题',
+      details: ['[critical] 农业产值数据与2020年统计年鉴不一致', '[major] 龙华镇平均海拔数据缺少来源', '[minor] "社队企业"应改为"乡镇企业"更符合本地用语习惯', '[minor] 文化教育章节缺少"体育事业"内容，建议补充'],
+    },
+  ];
+  const kgData = {
+    aspects: [
+      {
+        name: '建置沿革',
+        recall_query: '龙华镇建置沿革历史变迁',
+        triples: [
+          '(龙华镇, 建镇时间, 1984年) [score: 0.952]',
+          '(龙华镇, 前身, 龙华公社) [score: 0.935]',
+          '(龙华镇, 所属, 某某县) [score: 0.921]',
+          '(龙华镇, 面积, 186.7平方公里) [score: 0.898]',
+          '(龙华镇, 地理位置, 某某县东南部) [score: 0.876]',
+          '(龙华镇, 东邻, 凤城镇) [score: 0.832]',
+          '(龙华镇, 西连, 城关镇) [score: 0.815]',
+          '(龙华镇, 平均海拔, 280米) [score: 0.792]',
+          '(龙华镇, 气候类型, 亚热带季风气候) [score: 0.768]',
+          '(龙华镇, 年均气温, 18.5℃) [score: 0.754]',
+        ],
+        chunks: ['龙华镇位于某某县东南部，东经118°42′，北纬27°03′。1984年撤销龙华公社，设立龙华镇。2005年全镇面积扩大至186.7平方公里。'],
+        triple_count: 10,
+        chunk_count: 1,
+      },
+      {
+        name: '农业经济',
+        recall_query: '龙华镇农业经济产业结构',
+        triples: [
+          '(龙华镇, 农业总产值2020, 3.2亿元) [score: 0.945]',
+          '(龙华镇, 主要作物, 水稻/茶叶/柑橘) [score: 0.923]',
+          '(龙华镇, 粮食播种面积, 1.2万亩) [score: 0.912]',
+          '(龙华镇, 粮食总产, 5200吨) [score: 0.887]',
+          '(龙华镇, 茶园面积, 3500亩) [score: 0.865]',
+          '(龙华镇, 茶叶产量, 280吨) [score: 0.842]',
+          '(龙华镇, 茶叶产值, 4200万元) [score: 0.828]',
+          '(龙华镇, 森林覆盖率, 68%) [score: 0.815]',
+          '(龙华镇, 林业用地, 12.5万亩) [score: 0.793]',
+          '(龙华镇, 林业产值, 4800万元) [score: 0.776]',
+          '(龙华镇, 生猪出栏, 1.8万头) [score: 0.752]',
+          '(龙华镇, 畜牧业产值, 8000万元) [score: 0.734]',
+          '(龙华镇, "龙华云雾茶", 省名茶称号) [score: 0.698]',
+          '(龙华镇, 种植业占比, 45%) [score: 0.683]',
+          '(龙华镇, 渔业占比, 15%) [score: 0.652]',
+        ],
+        chunks: [
+          '龙华镇是某某县重要的农业产区。2020年全镇农业总产值3.2亿元，其中种植业占45%，林业占15%，畜牧业占25%，渔业占15%。',
+          '主要农产品有水稻、茶叶、水果（柑橘、杨梅）、竹笋等。茶叶是龙华镇特色产业，2020年茶园面积3500亩，产量280吨，产值4200万元。"龙华云雾茶"获省名茶称号。',
+        ],
+        triple_count: 15,
+        chunk_count: 2,
+      },
+      {
+        name: '工业发展',
+        recall_query: '龙华镇工业发展企业情况',
+        triples: [
+          '(龙华镇, 工业总产值2020, 5.6亿元) [score: 0.938]',
+          '(龙华镇, 规上企业数, 12家) [score: 0.915]',
+          '(龙华镇, 主要行业, 食品加工/竹木家具/茶叶精制) [score: 0.892]',
+          '(龙华竹业, 创建时间, 1992年) [score: 0.875]',
+          '(龙华竹业, 年产竹地板, 50万平方米) [score: 0.856]',
+          '(龙华竹业, 2020年产值, 1.2亿元) [score: 0.832]',
+          '(龙华茶业, 级别, 省级农业龙头企业) [score: 0.815]',
+          '(龙华茶业, 年产精制茶, 100吨) [score: 0.793]',
+        ],
+        chunks: ['龙华镇工业以农产品加工和竹木制品为主。2020年全镇工业总产值5.6亿元。规模以上企业12家。20世纪90年代，乡镇企业发展迅速，形成以竹制品、茶叶加工为主导的工业体系。'],
+        triple_count: 8,
+        chunk_count: 1,
+      },
+      {
+        name: '人口民族',
+        recall_query: '龙华镇人口民族构成变化',
+        triples: [
+          '(龙华镇, 总人口2020, 2.86万人) [score: 0.945]',
+          '(龙华镇, 男性人口, 1.48万人) [score: 0.923]',
+          '(龙华镇, 女性人口, 1.38万人) [score: 0.912]',
+          '(龙华镇, 汉族占比, 99.2%) [score: 0.895]',
+          '(龙华镇, 少数民族占比, 0.8%) [score: 0.876]',
+        ],
+        chunks: ['2020年第七次全国人口普查，龙华镇总人口2.86万人。其中男性1.48万人，女性1.38万人。全镇以汉族为主，占总人口的99.2%。少数民族有畲族、回族等，共0.8%。'],
+        triple_count: 5,
+        chunk_count: 1,
+      },
+      {
+        name: '文化教育',
+        recall_query: '龙华镇文化教育事业发展',
+        triples: [
+          '(龙华镇, 初级中学, 1所) [score: 0.938]',
+          '(龙华镇, 小学, 4所) [score: 0.925]',
+          '(龙华镇, 幼儿园, 6所) [score: 0.912]',
+          '(龙华镇, 在校学生, 3200人) [score: 0.898]',
+          '(龙华镇, 教职工, 210人) [score: 0.875]',
+          '(龙华镇, 文化站, 1个) [score: 0.852]',
+          '(龙华镇, 农家书屋, 12个) [score: 0.838]',
+        ],
+        chunks: ['龙华镇有初级中学1所，小学4所，幼儿园6所。2020年在校学生3200人，教职工210人。镇文化站1个，农家书屋12个。非物质文化遗产有龙华竹编、龙华山歌。'],
+        triple_count: 7,
+        chunk_count: 1,
+      },
+    ],
+    removed_items: [
+      { content: '(龙华镇, 气候类型, 亚热带季风) [score: 0.768]', reason: '与建置沿革主题无关，属于自然环境方面' },
+      { content: '(龙华镇, 土壤类型, 红壤) [score: 0.701]', reason: '属于自然环境方面而非建置沿革' },
+      { content: '(龙华镇, 工业总产值2020, 5.6亿元) [score: 0.938]', reason: '属于工业发展方面，非农业经济' },
+      { content: '(龙华镇, 学校数量, 11所) [score: 0.687]', reason: '属于文化教育方面，非农业经济' },
+      { content: '(龙华镇, 人口密度, 153人/km²) [score: 0.624]', reason: '属于人口民族方面，非农业经济' },
+      { content: '(龙华镇, 工业用地面积, 1200亩) [score: 0.592]', reason: '属于工业发展方面，非建置沿革' },
+      { content: '(龙华镇, 年降水量, 1650mm) [score: 0.568]', reason: '属于自然环境方面，非建置沿革' },
+      { content: '(龙华镇, 户籍人口, 2.75万人) [score: 0.556]', reason: '与常住人口数据重复，非文化教育' },
+    ],
+  };
+  const content = [
+    '<h2>凡例</h2>',
+    '<p>一、本志以马克思主义为指导，全面记述龙华镇自然、经济、政治、文化、社会的历史与现状。</p>',
+    '<p>二、本志断限为1980年至2025年。</p>',
+    '<h2>第一章 建置沿革</h2>',
+    '<p>龙华镇位于某某县东南部。1984年设立龙华镇。2005年全镇面积扩大至186.7平方公里。</p>',
+    '<h2>第二章 农业经济</h2>',
+    '<p>龙华镇是某某县重要的农业产区。2020年全镇农业总产值3.2亿元。主要农产品有水稻、茶叶、柑橘等。</p>',
+    '<h2>第三章 工业发展</h2>',
+    '<p>2020年全镇工业总产值5.6亿元。规模以上企业12家。以农产品加工和竹木制品为主。</p>',
+    '<h2>第四章 人口民族</h2>',
+    '<p>2020年龙华镇总人口2.86万人。全镇以汉族为主，少数民族占0.8%。</p>',
+    '<h2>第五章 文化教育</h2>',
+    '<p>龙华镇有初级中学1所，小学4所，幼儿园6所。2020年在校学生3200人。</p>',
+    '<h2>第六章 社会事业</h2>',
+    '<p>龙华镇卫生院1所。2020年全镇农民人均可支配收入2.15万元。</p>',
+  ].join('\n');
+
+  return { content, report, reportDetails, kgData };
+}
+
+function handleLoadDemo() {
+  clearMessages();
+  const demoConvId = 'demo_conv_' + Date.now();
+  conversations.value.unshift({
+    id: demoConvId,
+    title: '某某县龙华镇志（演示）',
+    time: new Date(),
+  } as any);
+  currentConvId.value = demoConvId;
+  _restoreDemoMessages();
+}
+
+function _restoreDemoMessages() {
+  const demo = _buildDemoMessages();
+  messages.value = [
+    {
+      id: 'user-demo-1',
+      role: 'user',
+      content: '帮我写一篇关于某某县经济变迁的镇志',
+      streaming: false,
+    },
+    {
+      id: 'assistant-demo-1',
+      role: 'assistant',
+      content: demo.content,
+      report: demo.report,
+      report_details: demo.reportDetails,
+      kg_data: demo.kgData,
+      streaming: false,
+    } as any,
+  ];
+}
+
 async function handleSelectConversation(convId: string) {
+  if (convId.startsWith('demo_conv_')) {
+    const found = conversations.value.find((c) => c.id === convId);
+    if (!found) return;
+    currentConvId.value = convId;
+    showEditor.value = false;
+    _restoreDemoMessages();
+    return;
+  }
   await selectConversation(convId);
 }
 
@@ -418,6 +622,15 @@ function exportToWord() {
           <div v-if="!loading && conversations.length === 0" class="conv-empty">
             暂无对话记录
           </div>
+        </div>
+        <div class="sidebar-footer">
+          <el-button
+            size="small"
+            class="demo-btn"
+            @click="handleLoadDemo"
+          >
+            加载演示数据
+          </el-button>
         </div>
       </div>
 
@@ -586,6 +799,18 @@ function exportToWord() {
 .sidebar-header h3 {
   margin: 0;
   font-size: 15px;
+}
+
+.sidebar-footer {
+  padding: 8px 14px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.demo-btn {
+  width: 100%;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  border-color: transparent;
 }
 
 .conv-list {

@@ -62,6 +62,7 @@ const coreRoutes: RouteRecordRaw[] = [
         component: () => import('#/views/_core/rag/file-manager/kb-task.vue'),
         meta: { hideInMenu: true, title: '知识库文件编辑' },
       },
+
     ],
   },
   {

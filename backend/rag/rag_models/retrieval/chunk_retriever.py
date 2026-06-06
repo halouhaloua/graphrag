@@ -138,13 +138,14 @@ def rerank_chunks(
     reranked = []
     for cid, faiss_score, content in zip(chunk_ids, scores, chunk_contents):
         try:
-            embed = torch.tensor(encoder.encode(content)).float().to(query_embed.device)
+            chunk_embed = torch.tensor(encoder.encode(content)).float().to(query_embed.device)
             sim = F.cosine_similarity(
-                query_embed.unsqueeze(0), embed.unsqueeze(0), dim=1
+                query_embed.unsqueeze(0), chunk_embed.unsqueeze(0), dim=1
             ).item()
             sim = max(0.0, sim)
             combined = (faiss_score + sim) / 2  # 语义分
-
+            # combined = faiss_score # 语义分
+            # combined = sim  # 语义分
             # tag 匹配分
             tag_score = 0.0
             if chunk_tags and cid in chunk_tags:

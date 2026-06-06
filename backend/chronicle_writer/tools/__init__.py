@@ -6,8 +6,6 @@ from chronicle_writer.tools.rag_recall import (
 from chronicle_writer.tools.rag_search_tool import RAGSearchTool, VerifyFactTool
 from chronicle_writer.tools.chronicle_write_tool import ChronicleWriteTool
 from chronicle_writer.tools.reference_tool import (
-    add_reference_tool,
-    list_references_tool,
     init_tools,
 )
 from chronicle_writer.tools.file_query_tool import file_query_tool
@@ -28,8 +26,6 @@ __all__ = [
     "VerifyFactTool",
     "ChronicleWriteTool",
     "SectionCRUDTool",
-    "add_reference_tool",
-    "list_references_tool",
     "file_query_tool",
     "template_tool",
     "list_templates_tool",

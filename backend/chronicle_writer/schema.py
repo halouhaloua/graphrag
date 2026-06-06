@@ -24,3 +24,72 @@ class ChronicleChatRequest(BaseModel):
     interrupt_decision: Optional[InterruptDecision] = Field(
         default=None, description="中断决策（人工复核时使用）"
     )
+
+
+# ─── 响应模型 ───
+
+
+class SectionNode(BaseModel):
+    """章节树节点"""
+
+    id: str
+    title: str
+    level: int
+    sort_order: int
+    content: str
+    word_count: int
+    status: str
+    children: list["SectionNode"] = []
+
+
+class ReviewItem(BaseModel):
+    """审查记录"""
+
+    id: str
+    section_id: Optional[str] = None
+    review_type: str
+    severity: str
+    issue: str
+    suggestion: Optional[str] = None
+    resolved: bool
+
+
+class LogEntry(BaseModel):
+    """工作流日志条目"""
+
+    stage: str
+    event_type: str
+    message: Optional[str] = None
+    created_at: str
+
+
+class ProjectDetail(BaseModel):
+    """项目详情（聚合章节树、审查摘要、报告）"""
+
+    id: str
+    title: str
+    chronicle_type: str
+    region_name: Optional[str] = None
+    scope_description: Optional[str] = None
+    status: str
+    word_count: int
+    report: Optional[str] = None
+    conversation_id: Optional[str] = None
+    sections: list[SectionNode]
+    review_summary: dict[str, int]
+    created_at: str
+
+
+class SectionListResponse(BaseModel):
+    items: list[SectionNode]
+    total: int
+
+
+class ReviewListResponse(BaseModel):
+    items: list[ReviewItem]
+    total: int
+
+
+class LogListResponse(BaseModel):
+    items: list[LogEntry]
+    total: int

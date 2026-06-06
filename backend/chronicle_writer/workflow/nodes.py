@@ -43,6 +43,172 @@ def _aspects_to_flat_items(aspects: list[dict]) -> list[dict]:
     return items
 
 
+async def _persist_section(
+    state: ChronicleWritingState,
+    section_id: str,
+    title: str,
+    level: int,
+    sort_order: int,
+    content: str,
+) -> None:
+    """将章节内容 upsert 到 chronicle_sections 表（不阻断工作流）。"""
+    from chronicle_writer.model import ChronicleSection
+    from chronicle_writer.tools.reference_tool import _db_factory
+    from sqlalchemy import select
+
+    try:
+        async with _db_factory() as db:
+            stmt = select(ChronicleSection).where(
+                ChronicleSection.project_id == state["project_id"],
+                ChronicleSection.sort_order == sort_order,
+                ChronicleSection.is_deleted.is_(False),
+            )
+            result = await db.execute(stmt)
+            existing = result.scalar_one_or_none()
+            if existing:
+                existing.title = title
+                existing.content = content
+                existing.word_count = len(content or "")
+                existing.status = "done"
+            else:
+                section = ChronicleSection(
+                    project_id=state["project_id"],
+                    title=title,
+                    level=level,
+                    sort_order=sort_order,
+                    content=content or "",
+                    status="done",
+                    word_count=len(content or ""),
+                )
+                db.add(section)
+            await db.commit()
+    except Exception as e:
+        logger.error(f"Failed to persist section {section_id}: {e}")
+        state["errors"].append(f"persist_section_{section_id}: {e}")
+
+
+async def _rebuild_section_tree(state: ChronicleWritingState) -> None:
+    """根据 level 层级关系，推算 sections 的 parent_id。"""
+    from chronicle_writer.model import ChronicleSection
+    from chronicle_writer.tools.reference_tool import _db_factory
+    from sqlalchemy import select
+
+    try:
+        async with _db_factory() as db:
+            stmt = (
+                select(ChronicleSection)
+                .where(
+                    ChronicleSection.project_id == state["project_id"],
+                    ChronicleSection.is_deleted.is_(False),
+                )
+                .order_by(ChronicleSection.sort_order)
+            )
+            sections = (await db.execute(stmt)).scalars().all()
+            last_at_level: dict[int, str] = {}
+            changed = False
+            for s in sections:
+                parent_id = last_at_level.get(s.level - 1)
+                if parent_id and s.parent_id != parent_id:
+                    s.parent_id = parent_id
+                    changed = True
+                elif not parent_id and s.parent_id is not None:
+                    s.parent_id = None
+                    changed = True
+                last_at_level[s.level] = s.id
+            if changed:
+                await db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to rebuild section tree: {e}")
+
+
+async def _log_stage(
+    state: ChronicleWritingState,
+    stage: str,
+    event_type: str,
+    message: str = "",
+) -> None:
+    """将阶段日志写入 chronicle_workflow_logs 表。
+
+    Args:
+        state: 工作流状态
+        stage: 节点名称（如 plan_project）
+        event_type: start / complete / error
+        message: 日志消息
+    """
+    from chronicle_writer.model import ChronicleWorkflowLog
+    from chronicle_writer.tools.reference_tool import _db_factory
+
+    try:
+        async with _db_factory() as db:
+            log = ChronicleWorkflowLog(
+                project_id=state["project_id"],
+                stage=stage,
+                event_type=event_type,
+                message=message,
+            )
+            db.add(log)
+            await db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to write log ({stage}/{event_type}): {e}")
+
+
+async def _persist_reviews(state: ChronicleWritingState) -> None:
+    """将审校结果批量写入 chronicle_reviews 表。
+
+    先软删除该项目的旧审查记录（修订场景），再写入当前结果。
+    """
+    from chronicle_writer.model import ChronicleReview
+    from chronicle_writer.tools.reference_tool import _db_factory
+    from sqlalchemy import update as sql_update
+
+    try:
+        async with _db_factory() as db:
+            await db.execute(
+                sql_update(ChronicleReview)
+                .where(ChronicleReview.project_id == state["project_id"])
+                .values(is_deleted=True)
+            )
+            for r in state.get("review_results", []):
+                review = ChronicleReview(
+                    project_id=state["project_id"],
+                    section_id=r.get("section_id"),
+                    review_type=r.get("review_type", "fact"),
+                    reviewer_agent="reviewer",
+                    issue=r.get("issue", ""),
+                    severity=r.get("severity", "minor"),
+                    suggestion=r.get("suggestion"),
+                )
+                db.add(review)
+            await db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to persist reviews: {e}")
+
+
+async def _update_project_report(state: ChronicleWritingState) -> None:
+    """将工作流报告和字数写入 chronicle_projects 表。"""
+    from chronicle_writer.model import ChronicleProject
+    from chronicle_writer.tools.reference_tool import _db_factory
+    from sqlalchemy import select
+
+    try:
+        async with _db_factory() as db:
+            stmt = select(ChronicleProject).where(
+                ChronicleProject.id == state["project_id"],
+                ChronicleProject.is_deleted.is_(False),
+            )
+            result = await db.execute(stmt)
+            project = result.scalar_one_or_none()
+            if project:
+                project.report = state.get("report", "")
+                project.word_count = sum(
+                    len(c) for c in state.get("sections", {}).values()
+                )
+                project.status = "done"
+                await db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to update project report: {e}")
+
+
 # ─── 循环条件判断 ───
 
 
@@ -65,6 +231,7 @@ def _decide_write_next(state: ChronicleWritingState) -> str:
 
 async def plan_project_node(state: ChronicleWritingState) -> ChronicleWritingState:
     """① 主编规划 — 加载模板 + 生成凡例 + 生成篇目"""
+    await _log_stage(state, "plan_project", "start")
     agent = create_coordinator()
     task = {
         "stage": "plan",
@@ -86,6 +253,9 @@ async def plan_project_node(state: ChronicleWritingState) -> ChronicleWritingSta
         section_count = len(state["outline"])
         state["status_message"] = "凡例和篇目生成完毕"
         _append_report(state, f"[规划] 篇目规划完成: 共 {section_count} 节")
+        await _log_stage(
+            state, "plan_project", "complete", f"篇目规划完成: 共{section_count}节"
+        )
         state["pending_events"].append(
             {
                 "type": "status",
@@ -105,6 +275,7 @@ async def plan_project_node(state: ChronicleWritingState) -> ChronicleWritingSta
         state["errors"].append(f"plan_project: {e}")
         state["status_message"] = f"规划失败: {e}"
         _append_report(state, f"[规划] 规划失败: {e}")
+        await _log_stage(state, "plan_project", "error", str(e))
         state["pending_events"].append({"type": "error", "message": f"规划失败: {e}"})
     return state
 
@@ -114,6 +285,7 @@ async def plan_project_node(state: ChronicleWritingState) -> ChronicleWritingSta
 
 async def decompose_only_node(state: ChronicleWritingState) -> ChronicleWritingState:
     """②-a 主题分解 — 将写作主题拆解为若干个检索方面"""
+    await _log_stage(state, "decompose_only", "start")
     _append_report(state, "[检索] 开始主题分解...")
 
     aspects = decompose_topic(
@@ -133,6 +305,7 @@ async def decompose_only_node(state: ChronicleWritingState) -> ChronicleWritingS
     state["status_message"] = f"主题分解为 {len(names)} 个方面"
 
     _append_report(state, f"[检索] 主题分解: 拆解为 {len(names)} 个方面")
+    await _log_stage(state, "decompose_only", "complete", f"拆解为{len(names)}个方面")
 
     state["pending_events"].append(
         {
@@ -152,6 +325,7 @@ async def decompose_only_node(state: ChronicleWritingState) -> ChronicleWritingS
 
 async def retrieve_aspect_node(state: ChronicleWritingState) -> ChronicleWritingState:
     """②-b 逐方面检索 + 微审计 — 单个方面"""
+    await _log_stage(state, "retrieve_aspect", "start")
     idx = state["_aspect_idx"]
     names = state.get("_aspect_names", [])
     queries = state.get("_aspect_queries", {})
@@ -237,6 +411,15 @@ async def retrieve_aspect_node(state: ChronicleWritingState) -> ChronicleWriting
         f"{aspect_entry['chunk_count']} 段原文，"
         f"保留 {aspect_entry['kept_count']} 条，移除 {aspect_entry['removed_count']} 条",
     )
+    if aspect_removed:
+        state.setdefault("report_details", []).append(
+            {
+                "summary": f"[检索] {name}: 移除 {len(aspect_removed)} 条",
+                "details": [
+                    f"移除: {d['content'][:80]} — {d['reason']}" for d in aspect_removed
+                ],
+            }
+        )
 
     state["pending_events"].append(
         {
@@ -248,6 +431,7 @@ async def retrieve_aspect_node(state: ChronicleWritingState) -> ChronicleWriting
         }
     )
 
+    await _log_stage(state, "retrieve_aspect", "complete", f"方面「{name}」检索完成")
     return state
 
 
@@ -256,6 +440,7 @@ async def retrieve_aspect_node(state: ChronicleWritingState) -> ChronicleWriting
 
 async def verify_evidence_node(state: ChronicleWritingState) -> ChronicleWritingState:
     """③ 史料考证 — 遍历 aspects 做事实验证"""
+    await _log_stage(state, "verify_evidence", "start")
     agent = create_researcher()
     task = {
         "stage": "verify",
@@ -282,13 +467,35 @@ async def verify_evidence_node(state: ChronicleWritingState) -> ChronicleWriting
             _append_report(
                 state, f"[验证] 验证 {verified_count} 条，发现 {contra_count} 处矛盾"
             )
+            state.setdefault("report_details", []).append(
+                {
+                    "summary": f"[验证] 发现 {contra_count} 处矛盾",
+                    "details": [
+                        f"矛盾: {c.get('description', '')}"
+                        for c in state.get("contradictions", [])
+                    ],
+                }
+            )
+            await _log_stage(
+                state,
+                "verify_evidence",
+                "complete",
+                f"验证{verified_count}条，发现{contra_count}处矛盾",
+            )
         else:
             state["status_message"] = f"事实核查完成: {verified_count} 条全部通过"
             _append_report(state, f"[验证] 验证 {verified_count} 条，全部通过")
+            await _log_stage(
+                state,
+                "verify_evidence",
+                "complete",
+                f"验证{verified_count}条，全部通过",
+            )
     except Exception as e:
         logger.error(f"verify_evidence_node failed: {e}")
         state["errors"].append(f"verify_evidence: {e}")
         _append_report(state, f"[验证] 验证失败: {e}")
+        await _log_stage(state, "verify_evidence", "error", str(e))
         state["pending_events"].append(
             {"type": "error", "message": f"史料考证失败: {e}"}
         )
@@ -300,6 +507,7 @@ async def verify_evidence_node(state: ChronicleWritingState) -> ChronicleWriting
 
 async def filter_relevance_node(state: ChronicleWritingState) -> ChronicleWritingState:
     """④ 相关度审校 + 跨方面矛盾检测"""
+    await _log_stage(state, "filter_relevance", "start")
     aspects = state.get("aspects", [])
     items = _aspects_to_flat_items(aspects)
 
@@ -308,6 +516,7 @@ async def filter_relevance_node(state: ChronicleWritingState) -> ChronicleWritin
         state["current_stage"] = "filtering"
         state["progress"] = 0.50
         _append_report(state, "[审校] 无待审校数据，跳过")
+        await _log_stage(state, "filter_relevance", "complete", "无待审校数据")
         return state
 
     agent = create_relevance_filter()
@@ -421,6 +630,12 @@ async def filter_relevance_node(state: ChronicleWritingState) -> ChronicleWritin
         }
     )
 
+    await _log_stage(
+        state,
+        "filter_relevance",
+        "complete",
+        f"保留{kept_count}条，移除{removed_count}条",
+    )
     return state
 
 
@@ -431,6 +646,7 @@ async def write_sections_coord_node(
     state: ChronicleWritingState,
 ) -> ChronicleWritingState:
     """⑤-a 撰写准备 — 确定章节顺序"""
+    await _log_stage(state, "write_sections_coord", "start")
     section_order = state.get("section_order", [])
     if not section_order and state["outline"]:
         section_order = [
@@ -440,10 +656,29 @@ async def write_sections_coord_node(
         ]
         state["section_order"] = section_order
 
+    # 软清理该项目的旧章节（修订/重跑场景）
+    from chronicle_writer.model import ChronicleSection
+    from chronicle_writer.tools.reference_tool import _db_factory
+    from sqlalchemy import update as sql_update
+
+    try:
+        async with _db_factory() as db:
+            await db.execute(
+                sql_update(ChronicleSection)
+                .where(ChronicleSection.project_id == state["project_id"])
+                .values(is_deleted=True)
+            )
+            await db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to clean old sections: {e}")
+
     state["_section_idx"] = 0
     state["current_stage"] = "drafting"
     state["progress"] = 0.50
     state["status_message"] = f"准备撰写 {len(section_order)} 节"
+    await _log_stage(
+        state, "write_sections_coord", "complete", f"准备撰写{len(section_order)}节"
+    )
 
     return state
 
@@ -453,6 +688,7 @@ async def write_sections_coord_node(
 
 async def write_section_node(state: ChronicleWritingState) -> ChronicleWritingState:
     """⑤-b 逐节撰写 — 当前一节"""
+    await _log_stage(state, "write_section", "start")
     idx = state["_section_idx"]
     section_order = state.get("section_order", [])
 
@@ -497,6 +733,15 @@ async def write_section_node(state: ChronicleWritingState) -> ChronicleWritingSt
                 )
 
         content = accumulated
+        # 持久化到 chronicle_sections
+        await _persist_section(
+            state=state,
+            section_id=section_id,
+            title=section_info.get("title", ""),
+            level=section_info.get("level", 1),
+            sort_order=idx,
+            content=content,
+        )
         state["sections"][section_id] = content
         state["_section_idx"] = idx + 1
         state["current_section_idx"] = idx
@@ -511,6 +756,12 @@ async def write_section_node(state: ChronicleWritingState) -> ChronicleWritingSt
                 "word_count": len(content),
             }
         )
+        await _log_stage(
+            state,
+            "write_section",
+            "complete",
+            f"第{idx + 1}节「{section_info.get('title', '')}」完成",
+        )
     except Exception as e:
         logger.error(f"write section {section_id} failed: {e}")
         state["errors"].append(f"write_section_{section_id}: {e}")
@@ -519,6 +770,16 @@ async def write_section_node(state: ChronicleWritingState) -> ChronicleWritingSt
         state["current_section_idx"] = idx
         state["pending_events"].append(
             {"type": "error", "message": f"章节撰写失败: {e}"}
+        )
+        await _log_stage(state, "write_section", "error", str(e))
+        # 空内容也持久化，标记失败
+        await _persist_section(
+            state=state,
+            section_id=section_id,
+            title=section_info.get("title", ""),
+            level=section_info.get("level", 1),
+            sort_order=idx,
+            content="",
         )
 
     return state
@@ -529,15 +790,20 @@ async def write_section_node(state: ChronicleWritingState) -> ChronicleWritingSt
 
 async def generate_appendix_node(state: ChronicleWritingState) -> ChronicleWritingState:
     """⑥ 图表凡例 — 生成撰写统计报告"""
+    await _log_stage(state, "generate_appendix", "start")
     section_order = state.get("section_order", [])
     total_words = sum(len(c) for c in state.get("sections", {}).values())
     _append_report(
         state, f"[撰写] 共撰写 {len(section_order)} 节，总计 {total_words} 字"
     )
 
+    # 根据 level 推算 sections 的 parent_id
+    await _rebuild_section_tree(state)
+
     state["current_stage"] = "appendix"
     state["progress"] = 0.82
     state["status_message"] = "图表凡例生成完毕"
+    await _log_stage(state, "generate_appendix", "complete")
     return state
 
 
@@ -546,6 +812,7 @@ async def generate_appendix_node(state: ChronicleWritingState) -> ChronicleWriti
 
 async def compile_document_node(state: ChronicleWritingState) -> ChronicleWritingState:
     """⑦ 统稿合成"""
+    await _log_stage(state, "compile_document", "start")
     agent = create_coordinator()
     task = {
         "stage": "compile",
@@ -565,10 +832,12 @@ async def compile_document_node(state: ChronicleWritingState) -> ChronicleWritin
         state["progress"] = 0.88
         state["status_message"] = "统稿合成完成"
         _append_report(state, "[统稿] 统稿合成完成")
+        await _log_stage(state, "compile_document", "complete")
     except Exception as e:
         logger.error(f"compile_document_node failed: {e}")
         state["errors"].append(f"compile: {e}")
         _append_report(state, f"[统稿] 统稿失败: {e}")
+        await _log_stage(state, "compile_document", "error", str(e))
         state["pending_events"].append(
             {"type": "error", "message": f"统稿合成失败: {e}"}
         )
@@ -580,6 +849,7 @@ async def compile_document_node(state: ChronicleWritingState) -> ChronicleWritin
 
 async def review_document_node(state: ChronicleWritingState) -> ChronicleWritingState:
     """⑧ 校审核对"""
+    await _log_stage(state, "review_document", "start")
     agent = create_reviewer()
     task = {
         "stage": "review",
@@ -600,6 +870,22 @@ async def review_document_node(state: ChronicleWritingState) -> ChronicleWriting
         issue_count = len(state["review_results"])
         state["status_message"] = f"审校完成，发现 {issue_count} 个问题"
         _append_report(state, f"[审查] 审查发现 {issue_count} 个问题")
+        state.setdefault("report_details", []).append(
+            {
+                "summary": f"[审查] 发现 {issue_count} 个问题",
+                "details": [
+                    f"[{r.get('severity', '')}] {r.get('issue', '')[:100]}"
+                    for r in state.get("review_results", [])
+                ],
+            }
+        )
+        await _persist_reviews(state)
+        await _log_stage(
+            state,
+            "review_document",
+            "complete",
+            f"发现{issue_count}个问题",
+        )
         state["pending_events"].append(
             {
                 "type": "review",
@@ -611,6 +897,7 @@ async def review_document_node(state: ChronicleWritingState) -> ChronicleWriting
         state["errors"].append(f"review: {e}")
         state["status_message"] = f"审校失败: {e}"
         _append_report(state, f"[审查] 审查失败: {e}")
+        await _log_stage(state, "review_document", "error", str(e))
         state["pending_events"].append({"type": "error", "message": f"审校失败: {e}"})
     return state
 
@@ -620,6 +907,7 @@ async def review_document_node(state: ChronicleWritingState) -> ChronicleWriting
 
 async def quality_check_node(state: ChronicleWritingState) -> ChronicleWritingState:
     """⑨ 质检归档"""
+    await _log_stage(state, "quality_check", "start")
     total_sections = len(state.get("sections", {}))
     written_sections = sum(1 for c in state["sections"].values() if c.strip())
     word_count = sum(len(c) for c in state["sections"].values())
@@ -651,6 +939,7 @@ async def quality_check_node(state: ChronicleWritingState) -> ChronicleWritingSt
     score = state["quality_score"]
     state["status_message"] = f"质检评分: {score}"
     _append_report(state, f"[质检] 质检评分: {score}")
+    await _log_stage(state, "quality_check", "complete", f"评分{score}")
     state["pending_events"].append(
         {
             "type": "quality",
@@ -666,11 +955,14 @@ async def quality_check_node(state: ChronicleWritingState) -> ChronicleWritingSt
 
 async def finalize_node(state: ChronicleWritingState) -> ChronicleWritingState:
     """⑩ 最终交付"""
+    await _log_stage(state, "finalize", "start")
     word_count = sum(len(c) for c in state.get("sections", {}).values())
     state["current_stage"] = "completed"
     state["progress"] = 1.0
     state["status_message"] = "志书生成完成"
     _append_report(state, "[完成] 志书生成完毕")
+    await _update_project_report(state)
+    await _log_stage(state, "finalize", "complete", f"共{word_count}字")
 
     state["pending_events"].append(
         {

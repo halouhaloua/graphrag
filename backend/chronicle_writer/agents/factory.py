@@ -20,7 +20,6 @@ from chronicle_writer.tools import (
     VerifyFactTool,
     ChronicleWriteTool,
     SectionCRUDTool,
-    add_reference_tool,
     template_tool,
     outline_tool,
 )
@@ -103,7 +102,6 @@ def create_drafter() -> Agent:
             tools=[
                 RAGSearchTool(),
                 SectionCRUDTool(),
-                add_reference_tool,
             ],
             skills_or_loaders=[_get_skills_loader()],
         ),
