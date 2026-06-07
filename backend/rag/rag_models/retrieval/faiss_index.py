@@ -1,9 +1,21 @@
-"""FAISS 索引管理 + 图一致性令牌
+"""FAISS 索引管理 + 图一致性校验
 
 功能：
 - 构建 4 种 FAISS 索引（节点、关系、三元组、社区）
 - 持久化/加载索引（含图签名一致性校验）
 - 提供搜索函数
+
+索引文本构成：
+  node_index:      f"{node_name},{node_description}"    — 实体语义
+  relation_index:  relation_name                         — 关系名
+  triple_index:    f"{head_text},{relation},{tail_text}" — 三元组语义
+  comm_index:      f"{comm_name},{comm_description}"     — 社区主题
+
+数据流：
+  NetworkX MultiDiGraph → compute_graph_signature() → md5
+    → build_all_indices() → FAISSIndexSet
+    → save_index_set() / load_index_set() → 磁盘持久化
+    → search_nodes() / search_relations() / search_triples() / search_communities()
 """
 
 import hashlib

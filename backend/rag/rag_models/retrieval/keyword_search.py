@@ -2,9 +2,15 @@
 
 功能：
 - 使用 jieba 从查询中提取关键词（词性标注 + 专名识别）
-- 构建/搜索倒排文本索引
+- 构建/搜索倒排文本索引（单词 → 节点ID）
 - 图路径搜索（DFS 关键词匹配）
 - 邻居展开与关系匹配
+
+数据流：
+  question → jieba 分词 → extract_query_keywords() → [kw1, kw2, ...]
+    → search_by_keywords(text_index, keywords) → 候选节点ID列表
+    → path_based_search(graph, candidates, keywords) → DFS 路径三元组
+    → get_relation_matched_triples(graph, candidates, relations) → 关系三元组
 """
 
 import os

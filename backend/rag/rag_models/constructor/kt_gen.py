@@ -8,8 +8,10 @@ from typing import Any, Dict, List, Tuple
 import nanoid
 import networkx as nx
 import tiktoken
+
 try:
     import json_repair
+
     HAS_JSON_REPAIR = True
 except ImportError:
     HAS_JSON_REPAIR = False
@@ -105,7 +107,7 @@ class KTBuilder:
         for chunk in chunks:
             try:
                 chunk_id = nanoid.generate(size=8)
-                chunk2id[chunk_id] = {"chunk": chunk, "macro_tags": {}, "entities": []}
+                chunk2id[chunk_id] = {"chunk": chunk, "entities": []}
             except Exception as e:
                 logger.warning(
                     f"Failed to generate chunk id with nanoid: {type(e).__name__}: {e}"
@@ -163,13 +165,15 @@ class KTBuilder:
         chunk_id: int,
         entity_type: str = None,
         file_name: str = "",
+        description: str = "",
     ) -> str:
         with self.lock:
             entity_node_id = next(
                 (
                     n
                     for n, d in self.graph.nodes(data=True)
-                    if d.get("label") == "entity" and d["properties"]["name"] == entity_name
+                    if d.get("label") == "entity"
+                    and d["properties"]["name"] == entity_name
                 ),
                 None,
             )
@@ -178,6 +182,8 @@ class KTBuilder:
                 properties = {"name": entity_name, "chunk id": chunk_id}
                 if entity_type:
                     properties["schema_type"] = entity_type
+                if description:
+                    properties["description"] = description
                 if file_name:
                     properties["file_name"] = file_name
                 self.graph.add_node(
@@ -192,8 +198,16 @@ class KTBuilder:
         chunk_id: int,
         entity_types: dict = {},
         file_name: str = "",
-    ):
+    ) -> dict:
+        entity_descriptions = {}
         for entity, attributes in extracted_attr.items():
+            desc = (
+                "，".join(str(a) for a in attributes)
+                if isinstance(attributes, list)
+                else str(attributes)
+            )
+            entity_descriptions[entity] = desc
+
             for attr in attributes:
                 attr_node_id = f"attr_{self.node_counter}"
                 attr_props = {"name": attr, "chunk id": chunk_id}
@@ -208,11 +222,12 @@ class KTBuilder:
                 self.node_counter += 1
                 entity_type = entity_types.get(entity) if entity_types else None
                 entity_node_id = self._find_or_create_entity(
-                    entity, chunk_id, entity_type, file_name
+                    entity, chunk_id, entity_type, file_name, description=desc
                 )
                 self.graph.add_edge(
                     entity_node_id, attr_node_id, relation="has_attribute"
                 )
+        return entity_descriptions
 
     def _process_triples(
         self,
@@ -220,7 +235,10 @@ class KTBuilder:
         chunk_id: int,
         entity_types: dict = {},
         file_name: str = "",
+        entity_descriptions: dict = None,
     ):
+        if entity_descriptions is None:
+            entity_descriptions = {}
         for triple in extracted_triples:
             validated_triple = _validate_triple_format(triple)
             if not validated_triple:
@@ -228,11 +246,13 @@ class KTBuilder:
             subj, pred, obj = validated_triple
             subj_type = entity_types.get(subj) if entity_types else None
             obj_type = entity_types.get(obj) if entity_types else None
+            subj_desc = entity_descriptions.get(subj, "")
+            obj_desc = entity_descriptions.get(obj, "")
             subj_node_id = self._find_or_create_entity(
-                subj, chunk_id, subj_type, file_name
+                subj, chunk_id, subj_type, file_name, description=subj_desc
             )
             obj_node_id = self._find_or_create_entity(
-                obj, chunk_id, obj_type, file_name
+                obj, chunk_id, obj_type, file_name, description=obj_desc
             )
             self.graph.add_edge(subj_node_id, obj_node_id, relation=pred)
 
@@ -246,7 +266,6 @@ class KTBuilder:
         extracted_attr = parsed_response.get("attributes", {})
         extracted_triples = parsed_response.get("triples", [])
         entity_types = parsed_response.get("entity_types", {})
-        macro_tags = parsed_response.get("macro_tags", {})
         entity_names = list(entity_types.keys())
 
         with self.lock:
@@ -255,10 +274,17 @@ class KTBuilder:
                 if new_schema_types:
                     self._update_schema_with_new_types(new_schema_types)
             if chunk_id in self.all_chunks:
-                self.all_chunks[chunk_id]["macro_tags"] = macro_tags
                 self.all_chunks[chunk_id]["entities"] = entity_names
-            self._process_attributes(extracted_attr, chunk_id, entity_types, file_name)
-            self._process_triples(extracted_triples, chunk_id, entity_types, file_name)
+            entity_descriptions = self._process_attributes(
+                extracted_attr, chunk_id, entity_types, file_name
+            )
+            self._process_triples(
+                extracted_triples,
+                chunk_id,
+                entity_types,
+                file_name,
+                entity_descriptions,
+            )
 
     def _update_schema_with_new_types(self, new_schema_types: Dict[str, List[str]]):
         try:
@@ -306,7 +332,7 @@ class KTBuilder:
                 )
                 if id is None:
                     id = nanoid.generate(size=8)
-                    chunk2id[id] = {"chunk": chunk, "macro_tags": {}, "entities": []}
+                    chunk2id[id] = {"chunk": chunk, "entities": []}
                     with self.lock:
                         self.all_chunks[id] = chunk2id[id]
                 self.process_level1_level2(chunk, id, file_name)
@@ -357,7 +383,9 @@ class KTBuilder:
                     except Exception:
                         failed_count += 1
         except Exception as e:
-            logger.error(f"ThreadPoolExecutor 处理文档时发生错误: {type(e).__name__}: {e}")
+            logger.error(
+                f"ThreadPoolExecutor 处理文档时发生错误: {type(e).__name__}: {e}"
+            )
             raise
 
         end_construct = time.time()

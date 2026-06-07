@@ -432,7 +432,9 @@ async def ask_file_question_stream(
         answer_tokens = []
         try:
             if asyncio.current_task().cancelled():
-                logger.info(f"SSE stream cancelled for client {client_id} at answer generation")
+                logger.info(
+                    f"SSE stream cancelled for client {client_id} at answer generation"
+                )
                 return
             async for token in generate_answer_stream(
                 state.llm_stream_client, init_prompt
@@ -521,7 +523,9 @@ async def ask_file_question_stream(
 
     for step in range(1, max_steps + 1):
         if asyncio.current_task().cancelled():
-            logger.info(f"SSE stream cancelled for client {client_id} at IRCoT step {step}")
+            logger.info(
+                f"SSE stream cancelled for client {client_id} at IRCoT step {step}"
+            )
             return
         loop_triples = _dedup(list(all_triples))
         loop_chunk_ids = list(set(all_chunk_ids))
@@ -662,20 +666,19 @@ async def ask_file_question_stream(
     yield _sse(type="done", answer=final_answer)
 
 
-def _sample_by_degree(
-    nodes: list, links: list, max_nodes: int
-) -> tuple[list, list]:
+def _sample_by_degree(nodes: list, links: list, max_nodes: int) -> tuple[list, list]:
     if len(nodes) <= max_nodes:
         return nodes, links
     degree = Counter()
     for link in links:
         degree[link["source"]] += 1
         degree[link["target"]] += 1
-    kept_ids = {id for id, _ in heapq.nlargest(max_nodes, degree.items(), key=lambda x: x[1])}
+    kept_ids = {
+        id for id, _ in heapq.nlargest(max_nodes, degree.items(), key=lambda x: x[1])
+    }
     kept_nodes = [n for n in nodes if n["id"] in kept_ids]
     kept_links = [
-        l for l in links
-        if l["source"] in kept_ids and l["target"] in kept_ids
+        l for l in links if l["source"] in kept_ids and l["target"] in kept_ids
     ]
     return kept_nodes, kept_links
 
@@ -720,6 +723,12 @@ def convert_graphrag_format(graph_data: list) -> Dict:
         start_node = item.get("start_node", {})
         end_node = item.get("end_node", {})
         relation = item.get("relation", "related_to")
+        # 跳过属性节点和边（属性已合并到实体节点的 description 中）
+        if (
+            start_node.get("label") == "attribute"
+            or end_node.get("label") == "attribute"
+        ):
+            continue
         if start_node:
             sid = start_node.get("properties", {}).get("name", "")
             if sid and sid not in nodes_dict:

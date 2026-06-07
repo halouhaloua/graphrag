@@ -7,6 +7,15 @@
 4. 在社区 FAISS 索引中搜索匹配的社区
 5. 展开社区成员节点
 6. 合并所有节点并评分
+
+数据流：
+  query_embed → _retrieve_via_triples:
+    ├─ search_triples_hard(triple_index) → 命中三元组 (带 3-hop BFS 展开)
+    └─ _score_triples_via_faiss(triple_index) → scored_triples
+  → _retrieve_via_communities:
+    ├─ search_communities(comm_index) → 命中社区
+    └─ get_community_nodes() → 社区成员节点
+  → 合并 → {triple_nodes, comm_nodes, scored_triples}
 """
 
 from collections import deque

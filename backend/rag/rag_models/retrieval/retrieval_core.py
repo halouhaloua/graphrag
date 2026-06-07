@@ -7,6 +7,13 @@
 4. retrieve：主编排入口（单路径/双路径）
 5. retrieve_with_type_filter：Schema 类型过滤编排
 6. process_retrieval_results：完整处理流水线（检索→评分→格式化→社区摘要）
+
+数据流：
+  KnowledgeGraph.graph_data (list[dict]) → NetworkX MultiDiGraph
+    → FAISS 索引 (node/relation/triple/community) + 文本缓存
+    → retrieve() → {path1_results, path2_results, chunk_ids}
+    → process_retrieval_results() → {triples, chunks, community_summaries}
+    → prompt_builder.build_prompt() → LLM
 """
 
 import threading
@@ -57,26 +64,77 @@ from rag.rag_models.retrieval.path2_triple_only import retrieve_path2
 
 @dataclass
 class RetrievalState:
-    """检索运行时的全部状态
+    """检索运行时的全部状态。
 
-    所有缓存均为惰性加载（在 build_retrieval_indices 中按需加载/重建）
+    所有缓存均为惰性加载（在 build_retrieval_indices 中按需加载/重建）。
+
+    Attributes:
+        graph (`nx.MultiDiGraph`):
+            NetworkX 多向图，包含实体节点、属性节点、社区节点和关系边。
+
+        encoder:
+            SentenceTransformer 文本编码器。
+
+        llm_client (`LLMCompletionCall`):
+            同步 LLM 调用客户端。
+
+        llm_stream_client (`LLMCompletionCallStream`):
+            异步流式 LLM 调用客户端。
+
+        faiss (`FAISSIndexSet | None`):
+            四种 FAISS 索引（node/relation/triple/community）的聚合容器。
+
+        chunk2id (`Dict[str, str]`):
+            chunk_id → 原始文本的映射表。
+
+        config:
+            全局配置对象。
+
+        dataset (`str`):
+            数据集标识名，用于缓存目录隔离。
+
+        top_k (`int`):
+            检索返回的最多三元组数。
+
+        recall_paths (`int`):
+            检索路径数。1=仅 Path1，2=Path1 + Path2。
+
+        cache_dir (`str`):
+            缓存根目录路径。
+
+        node_text_cache (`Dict[str, str]`):
+            预计算的节点文本缓存。键为节点ID，值为 "name description" 文本。
+
+        node_text_index (`Dict[str, set]`):
+            倒排索引。键为单词，值为包含该词的节点ID集合。
+
+        chunk_embedding_cache (`Dict[str, torch.Tensor]`):
+            预计算的 chunk 嵌入缓存。
+
+        chunk_faiss_index (`faiss.Index | None`):
+            chunk 文本的 FAISS 索引。
+
+        chunk_id_to_index (`Dict[int, str]`):
+            FAISS 索引位置 → chunk_id 的映射。
+
+        chunk_embeddings_precomputed (`bool`):
+            chunk 嵌入是否已预计算。
+
+        indices_built (`bool`):
+            所有索引是否已构建完成。
     """
 
-    graph: Any = None  # NetworkX MultiDiGraph
-    encoder: Any = None  # SentenceTransformer 编码器
-    llm_client: Any = None  # LLM 同步调用客户端
-    llm_stream_client: Any = None  # LLM 流式调用客户端
-    faiss: Optional[FAISSIndexSet] = None  # 四种 FAISS 索引
-    chunk2id: Dict[str, str] = field(default_factory=dict)  # {chunk_id: text}
-    chunk_tags: Dict[str, dict] = field(
-        default_factory=dict
-    )  # {chunk_id: {macro_tags, entities}}
+    graph: Any = None
+    encoder: Any = None
+    llm_client: Any = None
+    llm_stream_client: Any = None
+    faiss: Optional[FAISSIndexSet] = None
+    chunk2id: Dict[str, str] = field(default_factory=dict)
     config: Any = None
     dataset: str = ""
     top_k: int = 5
     recall_paths: int = 2
     cache_dir: str = "retriever/faiss_cache_new"
-    # 惰性缓存（在 build_retrieval_indices 中初始化）
     node_text_cache: Dict[str, str] = field(default_factory=dict)
     node_text_index: Dict[str, set] = field(default_factory=dict)
     chunk_embedding_cache: Dict[str, torch.Tensor] = field(default_factory=dict)
@@ -95,10 +153,31 @@ def init_retrieval_state(
     top_k: int = 5,
     recall_paths: int = 2,
 ) -> RetrievalState:
-    """从图数据创建检索状态
+    """从图数据创建检索状态。
 
-    支持从内存 graph_data 或文件路径 json_path 加载图，
-    其余组件（LLM 客户端、编码器）从 config 获取
+    支持从内存 graph_data list 或文件路径 json_path 加载图，
+    其余组件从 config 获取。
+
+    Args:
+        dataset (`str`):
+            数据集标识名，用于缓存目录隔离。
+        config:
+            全局配置对象，包含 embeddings、retrieval 等子配置。
+        graph_data (`list[dict] | None`, optional):
+            图谱数据，格式为 KnowledgeGraph.graph_data。
+            每个元素: {start_node: {label, properties}, relation, end_node: {label, properties}}
+        json_path (`str`, optional):
+            图谱数据文件路径（graph_data 为 None 时使用）。
+        chunks_data (`dict | None`, optional):
+            chunk 文本映射。格式: {chunk_id: {chunk: text, entities: [...]}}
+        top_k (`int`, optional):
+            检索返回的最多三元组数。
+        recall_paths (`int`, optional):
+            检索路径数（1=单路径，2=双路径）。
+
+    Returns:
+        `RetrievalState`:
+            检索状态对象，包含已加载的 NetworkX 图、编码器、LLM 客户端等。
     """
     cfg = config
 
@@ -114,19 +193,12 @@ def init_retrieval_state(
             raise ValueError("No graph data or path provided")
 
     chunk2id = {}
-    chunk_tags = {}
     if chunks_data:
         for cid, entry in chunks_data.items():
             if isinstance(entry, str):
                 chunk2id[cid] = entry
             else:
                 chunk2id[cid] = entry.get("chunk", "")
-                tags = {}
-                if entry.get("macro_tags"):
-                    tags["macro_tags"] = entry["macro_tags"]
-                if entry.get("entities"):
-                    tags["entities"] = entry["entities"]
-                chunk_tags[cid] = tags
 
     state = RetrievalState(
         graph=graph,
@@ -134,7 +206,6 @@ def init_retrieval_state(
         llm_client=call_llm_api.LLMCompletionCall(),
         llm_stream_client=call_llm_api.LLMCompletionCallStream(),
         chunk2id=chunk2id,
-        chunk_tags=chunk_tags,
         config=cfg,
         dataset=dataset,
         top_k=top_k if top_k != 5 else cfg.retrieval.top_k,
@@ -147,13 +218,18 @@ def init_retrieval_state(
 
 
 def build_retrieval_indices(state: RetrievalState):
-    """构建/加载所有检索索引
+    """构建/加载所有检索索引。
 
-    1. FAISS 索引（节点/关系/三元组/社区）
-    2. 节点文本缓存
-    3. 倒排文本索引
-    4. Chunk 索引（如果有 chunk 数据）
-    所有缓存共享图签名一致性校验，不匹配时自动全量重建
+    所有缓存共享图签名一致性校验，签名不匹配时自动全量重建。
+    构建的索引：
+    1. FAISS 索引（node/relation/triple/community）— 语义向量搜索
+    2. node_text_cache — 节点文本缓存
+    3. node_text_index — 倒排索引（单词 → 节点ID）
+    4. chunk_index — chunk FAISS 索引 + embedding 缓存
+
+    Args:
+        state (`RetrievalState`):
+            检索状态，函数会修改其 faiss、node_text_cache 等字段。
     """
     if state.indices_built:
         return
@@ -223,7 +299,7 @@ def _chunk_retrieval_fn(state: RetrievalState):
             top_k,
         )
         return rerank_chunks(
-            state.encoder, results, query_embed, top_k, state.chunk_tags
+            state.encoder, results, query_embed, top_k, state.chunk_embedding_cache
         )
 
     return _fn
@@ -234,14 +310,22 @@ def retrieve(
     question: str,
     involved_types: dict,
 ) -> Tuple[torch.Tensor, Dict]:
-    """主编排入口
+    """主编排入口，根据 recall_paths 选择检索策略。
 
-    根据 recall_paths 选择检索策略：
-    - 1：仅 Path1（节点/关系检索）
-    - 2：Path1 + Path2 并行检索
+    Args:
+        state (`RetrievalState`):
+            检索状态。
+        question (`str`):
+            用户的查询文本。
+        involved_types (`dict`):
+            关注的 Schema 类型。格式: {"nodes": [...], "relations": [...], "attributes": [...]}
 
-    关键词在主调线程中提取（避免 spaCy 线程安全问题），
-    传入 Path1 时已提取完毕
+    Returns:
+        `Tuple[torch.Tensor, Dict]`:
+            - query_embed: 查询 embedding 向量
+            - result: {path1_results: {top_nodes, top_relations, one_hop_triples, chunk_results},
+                       path2_results?: {scored_triples},
+                       chunk_ids: [...]}
     """
     if not state.indices_built:
         build_retrieval_indices(state)

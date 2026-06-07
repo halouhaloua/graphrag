@@ -22,30 +22,6 @@ prompts = {
      - Attributes: Map each entity to its descriptive features.    
      - Triples: List relations between entities in `[entity_mention1, relation, entity_mention2]` format.  
      - Entity_types: Map each entity to its schema type based on the provided schema.
-    - Macro_tags: You need to **globally, abstractly, and highly summarize** the entire text block,
-      extracting high-level summarizing keywords that can represent its **overall theme, core intent, 
-      and central idea**. If the keywords cannot reflect the whole, expand them into very short sentences.
-      Extract an appropriate number of keywords that best represent the whole.
-      - intent: **Analyze and infer** the author's specific purpose or goal in writing this paragraph.
-        Do NOT use generic verbs alone (e.g., "to compare", "to argue", "to define").
-        Instead, embed the concrete subject matter to form a short phrase.
-        Examples (adapt to the actual chunk):
-         - "compare the original novella and its film adaptation"
-         - "illustrate how a director interprets a literary work"
-         - "contrast the narrative structure of two versions"
-        
-      - topic: Reflect the **overall meaning of the whole paragraph**; 
-        Do not use scattered details, do not change the original meaning, add information, or omit the core message.
-        Should be some short noun phrase or keywords. Example: "Shawshank Redemption adaptation process".
-        
-      - function: **Analyze and infer** the paragraph's rhetorical or logical function within the broader context.
-        You must derive a short, concrete phrase that describes what the paragraph **does** in context.
-        Examples (adapt to the actual chunk):
-         - "exemplify the relationship between source material and derivative work"
-         - "provide a concrete case of film adaptation"
-         - "state a factual relation of adaptation"
-        Do **not** use generic labels like "definition", "example", "comparison" alone; instead, embed the topic.
-        The function must be **specific to the chunk**.
      ```
      input chunk:
      {chunk}
@@ -67,11 +43,6 @@ prompts = {
             "Rita Hayworth and Shawshank Redemption": "creative_work",
             "Frank Darabont": "person"
             }}
-        "macro_tags": {{
-            "intent": "compare novella with film, illustrate adaptation process",
-            "topic": "Shawshank Redemption, novella-to-film adaptation",
-            "function": "exemplify literary adaptation, give concrete case"
-            }},
         }}""",
         # 图构建提示词，演化模式
         "construction_general_agent": """You are an expert information extractor and structured data organizer. 
@@ -94,30 +65,6 @@ prompts = {
     - Attributes: Map each entity to its descriptive features.
     - Triples: List relations between entities in `[entity_mention1, relation, entity_mention2]` format.
     - Entity_types: Map each entity to its schema type based on the provided schema.
-    - Macro_tags: You need to **globally, abstractly, and highly summarize** the entire text block,
-      extracting high-level summarizing keywords that can represent its **overall theme, core intent, 
-      and central idea**. If the keywords cannot reflect the whole, expand them into very short sentences.
-      Extract an appropriate number of keywords that best represent the whole.
-      - intent: **Analyze and infer** the author's specific purpose or goal in writing this paragraph.
-        Do NOT use generic verbs alone (e.g., "to compare", "to argue", "to define").
-        Instead, embed the concrete subject matter to form a short phrase.
-        Examples (adapt to the actual chunk):
-         - "compare the original novella and its film adaptation"
-         - "illustrate how a director interprets a literary work"
-         - "contrast the narrative structure of two versions"
-        
-      - topic: Reflect the **overall meaning of the whole paragraph**; 
-        Do not use scattered details, do not change the original meaning, add information, or omit the core message.
-        Should be some short noun phrase or keywords. Example: "Shawshank Redemption adaptation process".
-        
-      - function: **Analyze and infer** the paragraph's rhetorical or logical function within the broader context.
-        You must derive a short, concrete phrase that describes what the paragraph **does** in context.
-        Examples (adapt to the actual chunk):
-         - "exemplify the relationship between source material and derivative work"
-         - "provide a concrete case of film adaptation"
-         - "state a factual relation of adaptation"
-        Do **not** use generic labels like "definition", "example", "comparison" alone; instead, embed the topic.
-        The function must be **specific to the chunk**.
 
     Schema Evolution: If you find new and important entity types, relation types,
     or attribute types that are valuable for knowledge extraction,
@@ -143,11 +90,6 @@ prompts = {
             "Shawshank Redemption": "creative_work",
             "Rita Hayworth and Shawshank Redemption": "creative_work",
             "Frank Darabont": "person"
-            }},
-        "macro_tags": {{
-            "intent": "compare novella with film, illustrate adaptation process",
-            "topic": "Shawshank Redemption, novella-to-film adaptation",
-            "function": "exemplify literary adaptation, give concrete case"
             }},
         "new_schema_types": {{
             "nodes": ["Novella"],

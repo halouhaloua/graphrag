@@ -4,7 +4,14 @@
 - 实体相似度计算（单节点 / 批量）
 - 三元组相关性评分（余弦相似度 + 关系类型加权）
 - 多路径结果合并排序
-- 三元组格式化输出
+- 三元组格式化输出（按头-关系分组，合并尾节点）
+
+数据流：
+  path1_triples (无分) + path2_scored (有分)
+    → merge_and_sort_scored_triples()
+      → rerank_triples(path1_triples) → path1_scored (有分)
+      → 合并去重排序 → scored_triples
+    → format_scored_triples() → 可读字符串列表
 """
 
 from collections import OrderedDict
@@ -31,7 +38,7 @@ _RELATION_BONUS_KEYWORDS = {
     "born",
     "died",
     "是",
-    "位于"
+    "位于",
 }
 
 
@@ -266,9 +273,13 @@ def format_scored_triples(
         tail_list = list(tails.keys())
         best_score = max(tails.values())
         if len(tail_list) == 1:
-            triple_text = f"({head_text}, {r}, {tail_list[0]}) [score: {best_score:.3f}]"
+            triple_text = (
+                f"({head_text}, {r}, {tail_list[0]}) [score: {best_score:.3f}]"
+            )
         else:
             tails_joined = ";".join(tail_list)
-            triple_text = f"({head_text}, {r}, {tails_joined}) [score: {best_score:.3f}]"
+            triple_text = (
+                f"({head_text}, {r}, {tails_joined}) [score: {best_score:.3f}]"
+            )
         formatted.append(triple_text)
     return formatted

@@ -7,6 +7,18 @@
 4. 邻居展开（1-hop + 路径搜索 + 关系匹配）
 5. Chunk 检索
 
+数据流：
+  query → query_embed + jieba keywords
+    → ThreadPoolExecutor:
+      ├─ search_nodes(node_index) → faiss_candidate_nodes
+      ├─ search_relations(relation_index) → all_relations
+      ├─ chunk_retrieval_fn(chunk_index) → chunk_results
+      └─ _batch_similarities(faiss_candidate_nodes) → node scores
+    → search_by_keywords(inverted_index) → keyword_candidate_nodes
+    → _batch_similarities(keyword_candidate_nodes) → keyword scores
+    → 合并 top_nodes
+    → path_based_search + neighbor_expansion + relation_matched_triples
+    → {top_nodes, top_relations, one_hop_triples, chunk_results}
 """
 
 from typing import Callable, Dict, List, Tuple

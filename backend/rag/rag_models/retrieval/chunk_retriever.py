@@ -1,10 +1,16 @@
 """Chunk（文本块）检索模块
 
 功能：
-- 构建 chunk 嵌入 + FAISS 索引
+- 构建 chunk 嵌入 + FAISS 索引（IndexFlatIP）
 - 按查询相似度检索 chunk
 - 检索结果重排序（FAISS 分数 + 余弦相似度加权平均）
 - 持久化/加载（独立于图签名的 chunk 签名校验）
+
+数据流：
+  chunk2id: {chunk_id: text}
+    → build_chunk_embeddings() → chunk_embedding_cache + chunk_faiss_index
+    → search_chunks() → {chunk_ids, scores, chunk_contents}
+    → rerank_chunks() → 使用预计算 embedding 重排序
 """
 
 import hashlib
@@ -122,13 +128,13 @@ def rerank_chunks(
     chunk_results: Dict,
     query_embed: torch.Tensor,
     top_k: int,
-    chunk_tags: Dict[str, dict] = None,
+    chunk_embedding_cache: Dict[str, torch.Tensor] = None,
 ) -> Dict:
     """对 chunk 检索结果重排序
 
-    策略：(FAISS 语义分 + 重编码余弦相似度) / 2 + tag 匹配分 × 0.3
+    策略：(FAISS 语义分 + 重编码余弦相似度) / 2
 
-    chunk_tags 结构：{chunk_id: {macro_tags: {intent, topic, function}, entities: [str]}}
+    优先使用 chunk_embedding_cache 中的预计算嵌入，避免重复编码
     """
     chunk_ids = chunk_results.get("chunk_ids", [])
     scores = chunk_results.get("scores", [])
@@ -138,41 +144,18 @@ def rerank_chunks(
     reranked = []
     for cid, faiss_score, content in zip(chunk_ids, scores, chunk_contents):
         try:
-            chunk_embed = torch.tensor(encoder.encode(content)).float().to(query_embed.device)
+            if chunk_embedding_cache and cid in chunk_embedding_cache:
+                chunk_embed = chunk_embedding_cache[cid].float().to(query_embed.device)
+            else:
+                chunk_embed = (
+                    torch.tensor(encoder.encode(content)).float().to(query_embed.device)
+                )
             sim = F.cosine_similarity(
                 query_embed.unsqueeze(0), chunk_embed.unsqueeze(0), dim=1
             ).item()
             sim = max(0.0, sim)
-            combined = (faiss_score + sim) / 2  # 语义分
-            # combined = faiss_score # 语义分
-            # combined = sim  # 语义分
-            # tag 匹配分
-            tag_score = 0.0
-            if chunk_tags and cid in chunk_tags:
-                t = chunk_tags[cid]
-                tag_text_parts = []
-                mt = t.get("macro_tags", {})
-                if mt.get("intent"):
-                    tag_text_parts.append(mt["intent"])
-                if mt.get("topic"):
-                    tag_text_parts.append(mt["topic"])
-                if mt.get("function"):
-                    tag_text_parts.append(mt["function"])
-                tag_text_parts.extend(t.get("entities", []))
-                tag_text = " ".join(tag_text_parts)
-                if tag_text.strip():
-                    tag_embed = (
-                        torch.tensor(encoder.encode(tag_text))
-                        .float()
-                        .to(query_embed.device)
-                    )
-                    tag_score = F.cosine_similarity(
-                        query_embed.unsqueeze(0), tag_embed.unsqueeze(0), dim=1
-                    ).item()
-                    tag_score = max(0.0, tag_score)
-
-            final_score = combined # + 0.3 * tag_score
-            reranked.append((cid, final_score, content))
+            combined = (faiss_score + sim) / 2
+            reranked.append((cid, combined, content))
         except Exception as e:
             logger.warning(f"rerank_chunks error for {cid}: {e}")
             reranked.append((cid, faiss_score, content))
