@@ -88,7 +88,6 @@ class RetrievalState:
         llm_stream_client: LLM 流式调用客户端
         faiss (`FAISSIndexSet`, optional): 四种 FAISS 索引
         chunk2id (`Dict[str, str]`): {chunk_id: chunk_text}
-        chunk_tags (`Dict[str, dict]`): {chunk_id: {macro_tags: ..., entities: ...}}
         config: 全局配置对象
         dataset (`str`): 数据集名称
         top_k (`int`): 检索 top-k 数量
@@ -109,7 +108,6 @@ class RetrievalState:
     llm_stream_client: Any = None
     faiss: Optional[FAISSIndexSet] = None
     chunk2id: Dict[str, str] = field(default_factory=dict)
-    chunk_tags: Dict[str, dict] = field(default_factory=dict)
     config: Any = None
     dataset: str = ""
     top_k: int = 5
@@ -148,7 +146,7 @@ def init_retrieval_state(
             图数据 JSON 文件路径（与 graph_data 二选一）
         chunks_data (`dict`, optional):
             {chunk_id: str | dict} chunk 数据。
-            dict 格式：{"chunk": str, "macro_tags": {...}, "entities": [...]}
+            dict 格式：{"chunk": str, "entities": [...]}
         top_k (`int`): 检索 top-k 数量
         recall_paths (`int`): 检索路径数（1 或 2）
 
@@ -170,19 +168,12 @@ def init_retrieval_state(
             raise ValueError("No graph data or path provided")
 
     chunk2id = {}
-    chunk_tags = {}
     if chunks_data:
         for cid, entry in chunks_data.items():
             if isinstance(entry, str):
                 chunk2id[cid] = entry
             else:
                 chunk2id[cid] = entry.get("chunk", "")
-                tags = {}
-                if entry.get("macro_tags"):
-                    tags["macro_tags"] = entry["macro_tags"]
-                if entry.get("entities"):
-                    tags["entities"] = entry["entities"]
-                chunk_tags[cid] = tags
 
     state = RetrievalState(
         graph=graph,
@@ -190,7 +181,6 @@ def init_retrieval_state(
         llm_client=call_llm_api.LLMCompletionCall(),
         llm_stream_client=call_llm_api.LLMCompletionCallStream(),
         chunk2id=chunk2id,
-        chunk_tags=chunk_tags,
         config=cfg,
         dataset=dataset,
         top_k=top_k if top_k != 5 else cfg.retrieval.top_k,
@@ -300,7 +290,7 @@ def _chunk_retrieval_fn(state: RetrievalState):
             top_k,
         )
         return rerank_chunks(
-            state.encoder, results, query_embed, top_k, state.chunk_tags
+            state.encoder, results, query_embed, top_k, state.chunk_embedding_cache
         )
 
     return _fn

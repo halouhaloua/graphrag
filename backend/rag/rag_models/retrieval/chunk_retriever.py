@@ -11,7 +11,7 @@
   build_chunk_index(encoder, chunk2id, cache_dir, dataset) → cache, index, id_map
   search_chunks(index, query_embed, chunk2id, id_map, top_k)
     → {"chunk_ids": [...], "scores": [...], "chunk_contents": [...]}
-  rerank_chunks(encoder, results, query_embed, top_k, chunk_tags)
+  rerank_chunks(encoder, results, query_embed, top_k, chunk_embedding_cache)
     → {"chunk_ids": [...], "scores": [...], "chunk_contents": [...]}
 
 Chunk 签名机制（独立于图签名）：
@@ -200,24 +200,21 @@ def rerank_chunks(
     chunk_results: Dict,
     query_embed: torch.Tensor,
     top_k: int,
-    chunk_tags: Dict[str, dict] = None,
+    chunk_embedding_cache: Dict[str, torch.Tensor] = None,
 ) -> Dict:
     """对 chunk 检索结果重排序
 
     策略：(FAISS 语义分 + 重编码余弦相似度) / 2
-    chunk_tags 为扩展预留（当前 tag_score 已注释未启用）。
 
-    .. note::
-        当前每个 chunk 被逐个 encoder.encode() 重新编码，
-        可改为批量编码或复用 chunk_embedding_cache 来优化。
+    优先使用 chunk_embedding_cache 中的预计算嵌入，避免重复编码。
 
     Args:
         encoder: SentenceTransformer 编码器
         chunk_results (`Dict`): search_chunks 的返回结果
         query_embed (`torch.Tensor`): 查询嵌入向量
         top_k (`int`): 最终返回数量
-        chunk_tags (`Dict[str, dict]`, optional):
-            {chunk_id: {macro_tags: {intent, topic, function}, entities: [str]}}
+        chunk_embedding_cache (`Dict[str, torch.Tensor]`, optional):
+            {chunk_id: 预计算嵌入向量}，由 build_chunk_index 构建。
 
     Returns:
         `Dict`:
@@ -233,36 +230,40 @@ def rerank_chunks(
     reranked = []
     for cid, faiss_score, content in zip(chunk_ids, scores, chunk_contents):
         try:
-            chunk_embed = torch.tensor(encoder.encode(content)).float().to(query_embed.device)
+            if chunk_embedding_cache and cid in chunk_embedding_cache:
+                chunk_embed = chunk_embedding_cache[cid].float().to(query_embed.device)
+            else:
+                chunk_embed = (
+                    torch.tensor(encoder.encode(content)).float().to(query_embed.device)
+                )
             sim = F.cosine_similarity(
                 query_embed.unsqueeze(0), chunk_embed.unsqueeze(0), dim=1
             ).item()
             sim = max(0.0, sim)
             combined = (faiss_score + sim) / 2
 
-            tag_score = 0.0
-            if chunk_tags and cid in chunk_tags:
-                t = chunk_tags[cid]
-                tag_text_parts = []
-                mt = t.get("macro_tags", {})
-                if mt.get("intent"):
-                    tag_text_parts.append(mt["intent"])
-                if mt.get("topic"):
-                    tag_text_parts.append(mt["topic"])
-                if mt.get("function"):
-                    tag_text_parts.append(mt["function"])
-                tag_text_parts.extend(t.get("entities", []))
-                tag_text = " ".join(tag_text_parts)
-                if tag_text.strip():
-                    tag_embed = (
-                        torch.tensor(encoder.encode(tag_text))
-                        .float()
-                        .to(query_embed.device)
-                    )
-                    tag_score = F.cosine_similarity(
-                        query_embed.unsqueeze(0), tag_embed.unsqueeze(0), dim=1
-                    ).item()
-                    tag_score = max(0.0, tag_score)
+            # tag_score = 0.0
+
+            #     tag_text_parts = []
+            #     mt = t.get("macro_tags", {})
+            #     if mt.get("intent"):
+            #         tag_text_parts.append(mt["intent"])
+            #     if mt.get("topic"):
+            #         tag_text_parts.append(mt["topic"])
+            #     if mt.get("function"):
+            #         tag_text_parts.append(mt["function"])
+            #     tag_text_parts.extend(t.get("entities", []))
+            #     tag_text = " ".join(tag_text_parts)
+            #     if tag_text.strip():
+            #         tag_embed = (
+            #             torch.tensor(encoder.encode(tag_text))
+            #             .float()
+            #             .to(query_embed.device)
+            #         )
+            #         tag_score = F.cosine_similarity(
+            #             query_embed.unsqueeze(0), tag_embed.unsqueeze(0), dim=1
+            #         ).item()
+            #         tag_score = max(0.0, tag_score)
 
             final_score = combined
             reranked.append((cid, final_score, content))
