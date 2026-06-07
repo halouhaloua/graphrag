@@ -7,7 +7,6 @@
 4. 邻居展开（1-hop + 路径搜索 + 关系匹配）
 5. Chunk 检索
 
-关键词提取在主调方完成（避免 spaCy 线程安全问题），以参数传入。
 """
 
 from typing import Callable, Dict, List, Tuple

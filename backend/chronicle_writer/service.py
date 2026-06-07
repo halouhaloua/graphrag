@@ -53,7 +53,7 @@ class ChronicleChatService:
     ) -> AsyncGenerator[dict, None]:
         from app.database import AsyncSessionLocal
         from rag.ai_writer.model import (
-            WriterMsgModel,
+            WriterMessage,
         )
 
         init_tools(lambda: AsyncSessionLocal())
@@ -63,7 +63,7 @@ class ChronicleChatService:
         conversation_id = await self._ensure_conversation(req, user_id, db)
 
         # ── 0.5 保存用户消息 ──
-        user_msg = WriterMsgModel(
+        user_msg = WriterMessage(
             conversation_id=conversation_id,
             role="user",
             content=req.question,
@@ -170,7 +170,7 @@ class ChronicleChatService:
                 else:
                     summary = full_content
 
-                assistant_msg = WriterMsgModel(
+                assistant_msg = WriterMessage(
                     conversation_id=conversation_id,
                     role="assistant",
                     content=summary,
@@ -190,7 +190,7 @@ class ChronicleChatService:
         self, req: ChronicleChatRequest, user_id: str, db: AsyncSession
     ) -> str:
         """获取或创建 WriterConversation，返回 conversation_id。"""
-        from rag.ai_writer.model import WriterConvModel as WCM
+        from rag.ai_writer.model import WriterConversation as WCM
 
         if req.conversation_id:
             stmt = select(WCM).where(

@@ -7,6 +7,7 @@
 - 三元组格式化输出
 """
 
+from collections import OrderedDict
 from typing import Dict, List, Tuple
 
 import torch
@@ -14,7 +15,6 @@ import torch.nn.functional as F
 
 from rag.rag_models.retrieval.text_processor import (
     build_triple_text,
-    get_node_properties,
     get_node_text,
     is_valid_node_text,
 )
@@ -236,16 +236,39 @@ def format_scored_triples(
 ) -> List[str]:
     """将带分数的三元组格式化为可读字符串，用于 LLM 上下文
 
-    格式: "(头文本 [属性], 关系, 尾文本 [属性]) [score: X.XXX]"
+    按 (h, r) 分组合并 tail 文本，减少重复头实体和关系。
+    格式: "(头文本, 关系, tail1、tail2) [score: X.XXX]"
     """
-    formatted = []
+    groups: OrderedDict[Tuple[str, str], OrderedDict[str, float]] = OrderedDict()
+    head_text_cache: Dict[str, str] = {}
+
     for h, r, t, score in scored_triples:
-        head_text = get_node_text(graph, h)
-        tail_text = get_node_text(graph, t)
-        if not is_valid_node_text(head_text) or not is_valid_node_text(tail_text):
+        if h not in head_text_cache:
+            head_text_cache[h] = get_node_text(graph, h)
+        if not is_valid_node_text(head_text_cache[h]):
             continue
-        head_props = get_node_properties(graph, h)
-        tail_props = get_node_properties(graph, t)
-        triple_text = f"({head_text} {head_props}, {r}, {tail_text} {tail_props}) [score: {score:.3f}]"
+        tail_text = get_node_text(graph, t)
+        if not is_valid_node_text(tail_text):
+            continue
+
+        key = (h, r)
+        if key not in groups:
+            groups[key] = OrderedDict()
+        # 去重 tail，保留最高分
+        if tail_text not in groups[key]:
+            groups[key][tail_text] = score
+        else:
+            groups[key][tail_text] = max(groups[key][tail_text], score)
+
+    formatted = []
+    for (h, r), tails in groups.items():
+        head_text = head_text_cache.get(h, get_node_text(graph, h))
+        tail_list = list(tails.keys())
+        best_score = max(tails.values())
+        if len(tail_list) == 1:
+            triple_text = f"({head_text}, {r}, {tail_list[0]}) [score: {best_score:.3f}]"
+        else:
+            tails_joined = ";".join(tail_list)
+            triple_text = f"({head_text}, {r}, {tails_joined}) [score: {best_score:.3f}]"
         formatted.append(triple_text)
     return formatted
