@@ -8,17 +8,20 @@
 5. Chunk 检索
 
 数据流：
-  query → query_embed + jieba keywords
-    → ThreadPoolExecutor:
-      ├─ search_nodes(node_index) → faiss_candidate_nodes
-      ├─ search_relations(relation_index) → all_relations
-      ├─ chunk_retrieval_fn(chunk_index) → chunk_results
-      └─ _batch_similarities(faiss_candidate_nodes) → node scores
-    → search_by_keywords(inverted_index) → keyword_candidate_nodes
-    → _batch_similarities(keyword_candidate_nodes) → keyword scores
-    → 合并 top_nodes
-    → path_based_search + neighbor_expansion + relation_matched_triples
-    → {top_nodes, top_relations, one_hop_triples, chunk_results}
+  retrieve_path1(graph, index_set, encoder, query_embed, question, keywords, ...)
+    → {
+        "top_nodes": [node_id, ...],           # Path1 匹配的 top-k 节点
+        "top_relations": [rel_name, ...],       # FAISS 关系检索结果
+        "one_hop_triples": [(h, r, t), ...],    # 所有路径收集的三元组
+        "chunk_results": {...}                   # chunk 检索结果
+      }
+
+并行子任务：
+  ┌─ FAISS 节点搜索 ──→ 批量余弦相似度 ──┐
+  ├─ FAISS 关系搜索 ─────────────────────┤
+  ├─ Chunk 检索 ─────────────────────────┤
+  ├─ 关键词搜索 ──→ 批量余弦相似度 ──────┤→ 合并节点 → 邻居展开 → 路径搜索 → 汇总
+  └────────────────────────────────────────┘
 """
 
 from typing import Callable, Dict, List, Tuple
@@ -46,7 +49,19 @@ def _optimized_neighbor_expansion(
     graph: nx.MultiDiGraph,
     top_nodes: List[str],
 ) -> List[Tuple[str, str, str]]:
-    """从 top_nodes 展开 1-hop 邻居，收集三元组"""
+    """从 top_nodes 展开 1-hop 邻居，收集三元组
+
+    先收集所有邻居节点，再双向检查边关系（出边+入边），
+    避免重复遍历邻居集合。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象
+        top_nodes (`List[str]`): 候选节点 ID 列表
+
+    Returns:
+        `List[Tuple[str, str, str]]`:
+            [(头ID, 关系, 尾ID), ...]
+    """
     all_neighbors = set()
     for node in top_nodes:
         if node in graph.nodes:
@@ -85,6 +100,27 @@ def retrieve_path1(
 
     先进行 FAISS 节点搜索 + 关键词搜索（有并行子任务），
     然后进行邻居展开、路径搜索、关系匹配，最后汇总三元组和 chunk。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 知识图谱
+        index_set (`FAISSIndexSet`): FAISS 索引集合
+        encoder: SentenceTransformer 编码器
+        query_embed (`torch.Tensor`): 查询嵌入向量
+        question (`str`): 原始查询文本（未使用，保留接口）
+        keywords (`List[str]`): extract_query_keywords 提取的关键词
+        node_text_cache (`Dict[str, str]`): {节点ID: 节点文本}
+        node_text_index (`Dict[str, set]`): 倒排索引 {单词: {节点ID}}
+        chunk_retrieval_fn (`Callable`): chunk 检索闭包
+        config: 配置对象
+        top_k (`int`): 返回 top-k 节点
+        max_workers (`int`): 内部 ThreadPoolExecutor 线程数
+
+    Returns:
+        `Dict`:
+            - "top_nodes": List[str] — 合并后的 top-k 节点（FAISS + 关键词）
+            - "top_relations": List[str] — FAISS 关系检索命中的关系名
+            - "one_hop_triples": List[Tuple] — 邻居+路径+关系匹配的三元组
+            - "chunk_results": Dict — chunk 检索结果
     """
     if config:
         max_workers = getattr(getattr(config, "retrieval", None), "faiss", None)
@@ -187,7 +223,22 @@ def _batch_similarities(
     graph: nx.MultiDiGraph,
     text_cache: Dict[str, str],
 ) -> Dict[str, float]:
-    """批量计算查询与一组节点的余弦相似度"""
+    """批量计算查询与一组节点的余弦相似度
+
+    .. note::
+        当前没有持久化嵌入缓存，相同节点在不同查询或子问题间会重复编码。
+        可考虑将嵌入缓存传入以复用。
+
+    Args:
+        encoder: SentenceTransformer 编码器
+        query_embed (`torch.Tensor`): 查询嵌入
+        nodes (`List[str]`): 待评分节点 ID 列表
+        graph (`nx.MultiDiGraph`): 图对象
+        text_cache (`Dict[str, str]`): {节点ID: 文本}
+
+    Returns:
+        `Dict[str, float]`: {节点ID: 余弦相似度}
+    """
     if not nodes:
         return {}
     items = []

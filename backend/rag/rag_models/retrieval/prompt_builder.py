@@ -3,6 +3,15 @@
 功能：
 - 根据数据集类型构建不同风格的 LLM 提示词
 - 支持同步与流式答案生成
+
+数据流：
+  build_prompt(config, dataset, question, sub_questions, context) → str
+  generate_answer(llm_client, prompt) → str
+  generate_answer_stream(llm_stream_client, prompt) → AsyncGenerator[str]  # SSE
+
+提示词模板来源：
+  1. 优先：config 中配置的 retrieval prompt（支持 general / novel_chs / novel_eng）
+  2. fallback：硬编码默认模板（novel / novel_eng / general）
 """
 
 from typing import Any, AsyncGenerator
@@ -21,7 +30,17 @@ def build_prompt(
     """根据 dataset 类型选择对应的提示词模板
 
     优先使用 config 中配置的 prompt template，
-    无 config 时使用硬编码默认模板（novel / novel_eng / general）
+    无 config 时使用硬编码默认模板（novel / novel_eng / general）。
+
+    Args:
+        config: 配置对象（含 get_prompt_formatted 方法）
+        dataset (`str`): 数据集名称（决定模板类型）
+        question (`str`): 用户原始问题
+        sub_questions (`list`): GraphQ 分解后的子问题列表
+        context (`str`): 检索到的知识上下文（含三元组、chunk、社区摘要）
+
+    Returns:
+        `str`: 完整的 LLM 提示词
     """
     if config is not None:
         if dataset == "novel":
@@ -96,7 +115,15 @@ def build_prompt(
 
 
 def generate_answer(llm_client: call_llm_api.LLMCompletionCall, prompt: str) -> str:
-    """同步生成答案"""
+    """同步生成答案
+
+    Args:
+        llm_client (`LLMCompletionCall`): LLM 同步调用客户端
+        prompt (`str`): 完整提示词（由 build_prompt 生成）
+
+    Returns:
+        `str`: LLM 生成的答案文本
+    """
     answer = llm_client.call_api(prompt)
     logger.info(f"Answer: {answer}")
     return answer
@@ -106,6 +133,16 @@ async def generate_answer_stream(
     llm_stream_client: call_llm_api.LLMCompletionCallStream,
     prompt: str,
 ) -> AsyncGenerator[str, None]:
-    """流式生成答案（用于 SSE 场景）"""
+    """流式生成答案（用于 SSE 场景）
+
+    每次 yield 一个 token，调用方接收后通过 SSE 推送给前端。
+
+    Args:
+        llm_stream_client (`LLMCompletionCallStream`): LLM 流式调用客户端
+        prompt (`str`): 完整提示词
+
+    Yields:
+        `str`: 单个 token 文本
+    """
     async for token in llm_stream_client.call_api_stream(prompt):
         yield token

@@ -4,14 +4,18 @@
 - 实体相似度计算（单节点 / 批量）
 - 三元组相关性评分（余弦相似度 + 关系类型加权）
 - 多路径结果合并排序
-- 三元组格式化输出（按头-关系分组，合并尾节点）
+- 三元组格式化输出（支持 (h,r) 去重合并）
 
 数据流：
-  path1_triples (无分) + path2_scored (有分)
-    → merge_and_sort_scored_triples()
-      → rerank_triples(path1_triples) → path1_scored (有分)
-      → 合并去重排序 → scored_triples
-    → format_scored_triples() → 可读字符串列表
+  compute_entity_similarity(encoder, query_embed, node_text) → float
+  batch_compute_entity_similarities(encoder, query_embed, [(node_id, text), ...])
+    → {node_id: similarity}
+  rerank_triples(encoder, query_embed, [(h,r,t), ...], graph, top_k)
+    → [(h, r, t, score), ...]
+  merge_and_sort_scored_triples(path1, path2_scored, ...)
+    → [(h, r, t, score), ...]
+  format_scored_triples(graph, scored_triples)
+    → [str]  # 已按 (h,r) 分组合并
 """
 
 from collections import OrderedDict
@@ -38,7 +42,7 @@ _RELATION_BONUS_KEYWORDS = {
     "born",
     "died",
     "是",
-    "位于",
+    "位于"
 }
 
 
@@ -54,7 +58,18 @@ def compute_entity_similarity(
 ) -> float:
     """计算查询与单个实体的余弦相似度
 
-    优先使用缓存中的节点嵌入，避免重复编码
+    优先使用缓存中的节点嵌入，避免重复编码。
+
+    Args:
+        encoder: SentenceTransformer 编码器
+        query_embed (`torch.Tensor`): 查询嵌入向量
+        node_text (`str`): 节点的文本表示（name + description）
+        cache (`Dict[str, torch.Tensor]`, optional): {节点ID: 嵌入} 缓存
+        node_id (`str`, optional): 节点 ID（用于缓存）
+
+    Returns:
+        `float`:
+            余弦相似度值 [0.0, 1.0]，文本无效时返回 0.0
     """
     if not is_valid_node_text(node_text):
         return 0.0
@@ -84,8 +99,20 @@ def batch_compute_entity_similarities(
 ) -> Dict[str, float]:
     """批量计算查询与多个实体的余弦相似度
 
-    输入: [(node_id, node_text), ...]
-    输出: {node_id: similarity}
+    优先使用缓存中的嵌入，未缓存文本再编码。
+    支持部分命中缓存。
+
+    Args:
+        encoder: SentenceTransformer 编码器
+        query_embed (`torch.Tensor`): 查询嵌入向量
+        nodes_with_texts (`List[Tuple[str, str]]`):
+            [(node_id, node_text), ...]
+        cache (`Dict[str, torch.Tensor]`, optional):
+            {节点ID: 嵌入} 缓存，会被更新
+
+    Returns:
+        `Dict[str, float]`:
+            {node_id: cosine_similarity}，按输入顺序
     """
     texts = []
     valid_items = []
@@ -137,7 +164,15 @@ def batch_compute_entity_similarities(
 
 
 def _score_single_triple(similarity: float, relation: str) -> float:
-    """对单个三元组打分：基础相似度 + 关系类型加权"""
+    """对单个三元组打分：基础相似度 + 关系类型加权
+
+    Args:
+        similarity (`float`): 余弦相似度
+        relation (`str`): 关系名称
+
+    Returns:
+        `float`: 最终分数（≥0）
+    """
     bonus = 0.1 if relation.lower() in _RELATION_BONUS_KEYWORDS else 0.0
     return max(0.0, similarity + bonus)
 
@@ -152,7 +187,20 @@ def rerank_triples(
     graph=None,
     top_k: int = 20,
 ) -> List[Tuple[str, str, str, float]]:
-    """批量编码三元组文本并计算与查询的余弦相似度，返回带分数的结果"""
+    """批量编码三元组文本并计算与查询的余弦相似度，返回带分数的结果
+
+    Args:
+        encoder: SentenceTransformer 编码器
+        query_embed (`torch.Tensor`): 查询嵌入向量
+        triples (`List[Tuple[str, str, str]]`):
+            [(头ID, 关系, 尾ID), ...]
+        graph: NetworkX MultiDiGraph（可选，用于构建三元组文本）
+        top_k (`int`): 返回 top-k 数量
+
+    Returns:
+        `List[Tuple[str, str, str, float]]`:
+            [(头ID, 关系, 尾ID, score), ...] 按分数降序
+    """
     if not triples:
         return []
     triple_texts = []
@@ -191,7 +239,15 @@ def rerank_triples_individual(
     graph=None,
     top_k: int = 20,
 ) -> List[Tuple[str, str, str, float]]:
-    """逐个编码三元组并评分（batch 编码失败时的 fallback）"""
+    """逐个编码三元组并评分（batch 编码失败时的 fallback）
+
+    Args:
+        同 rerank_triples
+
+    Returns:
+        `List[Tuple[str, str, str, float]]`:
+            同 rerank_triples
+    """
     scored = []
     for h, r, t in triples:
         try:
@@ -227,7 +283,21 @@ def merge_and_sort_scored_triples(
 ) -> List[Tuple[str, str, str, float]]:
     """合并两条检索路径的结果，去重后按分数排序
 
-    Path1 的三元组无分数，需要先重排序再合并
+    Path1 的三元组无分数，需要先重排序再合并。
+
+    Args:
+        path1_triples (`List[Tuple[str, str, str]]`):
+            Path1 的原始三元组（无分数）
+        path2_scored (`List[Tuple[str, str, str, float]]`):
+            Path2 的带分三元组
+        encoder: SentenceTransformer 编码器
+        query_embed (`torch.Tensor`): 查询嵌入
+        top_k (`int`): 返回 top-k
+        graph: NetworkX MultiDiGraph
+
+    Returns:
+        `List[Tuple[str, str, str, float]]`:
+            合并去重后按分数降序的 top-k 三元组
     """
     all_scored = list(path2_scored)
     if path1_triples:
@@ -245,6 +315,19 @@ def format_scored_triples(
 
     按 (h, r) 分组合并 tail 文本，减少重复头实体和关系。
     格式: "(头文本, 关系, tail1、tail2) [score: X.XXX]"
+
+    Args:
+        graph: NetworkX MultiDiGraph
+        scored_triples (`List[Tuple[str, str, str, float]]`):
+            [(头节点ID, 关系, 尾节点ID, score), ...]
+
+    Returns:
+        `List[str]`:
+            [
+                "(江兰兰, 隶属于, 江西师范大学、江西师范大学马克思主义理论博士后科研流动站) [score: 0.517]",
+                "(江兰兰, has_attribute, 类型: 人物) [score: 0.558]",
+                ...
+            ]
     """
     groups: OrderedDict[Tuple[str, str], OrderedDict[str, float]] = OrderedDict()
     head_text_cache: Dict[str, str] = {}
@@ -273,13 +356,9 @@ def format_scored_triples(
         tail_list = list(tails.keys())
         best_score = max(tails.values())
         if len(tail_list) == 1:
-            triple_text = (
-                f"({head_text}, {r}, {tail_list[0]}) [score: {best_score:.3f}]"
-            )
+            triple_text = f"({head_text}, {r}, {tail_list[0]}) [score: {best_score:.3f}]"
         else:
-            tails_joined = ";".join(tail_list)
-            triple_text = (
-                f"({head_text}, {r}, {tails_joined}) [score: {best_score:.3f}]"
-            )
+            tails_joined = "、".join(tail_list)
+            triple_text = f"({head_text}, {r}, {tails_joined}) [score: {best_score:.3f}]"
         formatted.append(triple_text)
     return formatted

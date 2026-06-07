@@ -3,6 +3,12 @@
 功能：
 - 根据 entity schema_type 过滤候选节点
 - 在过滤后的节点集上执行 FAISS 相似度搜索
+
+数据流：
+  filter_nodes_by_schema_type(graph, ["person", "location"])
+    → [node_id, ...]  # 只返回 schema_type 匹配的实体节点
+  similarity_search_on_filtered(index_set, query_embed, filtered_nodes, top_k)
+    → {"top_nodes": [node_id, ...]}  # 在过滤集上重建临时索引并搜索
 """
 
 from typing import Dict, List
@@ -18,7 +24,17 @@ def filter_nodes_by_schema_type(graph, target_types: List[str]) -> List[str]:
     """根据 Schema 类型过滤节点
 
     只返回 schema_type 匹配目标类型的实体节点，
-    无 schema_type 但 label="entity" 的节点也包含（向前兼容）
+    无 schema_type 但 label="entity" 的节点也包含（向前兼容）。
+
+    Args:
+        graph: NetworkX MultiDiGraph
+        target_types (`List[str]`):
+            目标 schema 类型列表，如 ["person", "location"]。
+            为空时返回所有节点。
+
+    Returns:
+        `List[str]`:
+            匹配的节点 ID 列表
     """
     if not target_types:
         return list(graph.nodes())
@@ -42,7 +58,17 @@ def similarity_search_on_filtered(
     """在过滤后的节点集上执行 FAISS 相似度搜索
 
     通过全局 node_index 中重建过滤后节点的嵌入，
-    创建临时 FAISS 索引进行搜索
+    创建临时 FAISS 索引进行搜索。
+
+    Args:
+        index_set (`FAISSIndexSet`): 全局 FAISS 索引集合
+        query_embed (`torch.Tensor`): 查询嵌入向量
+        filtered_nodes (`List[str]`): filter_nodes_by_schema_type 的结果
+        top_k (`int`): 返回 top-k
+
+    Returns:
+        `Dict`:
+            - "top_nodes": List[str] — 过滤后节点中 top-k 节点
     """
     if not filtered_nodes:
         return {"top_nodes": []}

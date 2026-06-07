@@ -3,6 +3,21 @@
 功能：
 - 从社区节点展开其成员实体
 - 从检索到的三元组反向收集关联的社区摘要
+
+数据流：
+  get_community_nodes(graph, comm_node_id, name_to_id) → [实体节点ID, ...]
+  collect_community_summaries(graph, scored_triples)
+    → [{"name": str, "description": str, "members": list, "keywords": list}, ...]
+
+社区节点结构（由 constructor/tree_comm.py 创建）：
+  label: "community"
+  properties: {
+    "name": "社区名称（LLM生成）",
+    "description": "社区摘要（LLM生成）",
+    "members": ["实体名称1", "实体名称2", ...],
+    "keywords": ["关键词1", "关键词2", ...]
+  }
+  实体节点通过 "member_of" 边指向所属社区超节点。
 """
 
 from typing import Dict, List, Tuple
@@ -18,7 +33,17 @@ def get_community_nodes(
     """获取社区节点包含的所有成员实体 ID
 
     社区节点的 properties["members"] 中存储了成员名称列表，
-    需通过名称反查节点ID（支持 name_to_id 预计算索引加速）
+    需通过名称反查节点ID（支持 name_to_id 预计算索引加速）。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象
+        comm_node_id (`str`): 社区节点 ID
+        name_to_id (`Dict[str, str]`, optional):
+            {实体名称: 节点ID} 预计算映射，加速名称反查
+
+    Returns:
+        `List[str]`:
+            实体节点 ID 列表，非社区节点或成员为空时返回 []
     """
     if comm_node_id not in graph.nodes:
         return []
@@ -54,7 +79,25 @@ def collect_community_summaries(
 
     遍历三元组中的头尾实体节点，
     沿 member_of 边找到所属社区，
-    返回去重后的社区信息（name, description, members, keywords）
+    返回去重后的社区信息。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象
+        scored_triples (`List[Tuple]`):
+            [(头ID, 关系, 尾ID, score), ...]
+
+    Returns:
+        `List[Dict]`:
+            [
+                {
+                    "name": "社区名称",
+                    "description": "社区摘要",
+                    "members": ["实体名1", ...],
+                    "keywords": ["关键词1", ...]
+                },
+                ...
+            ]
+            按发现顺序，自动去重
     """
     community_set = {}
     for item in scored_triples:

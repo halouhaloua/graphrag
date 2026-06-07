@@ -2,15 +2,20 @@
 
 功能：
 - 使用 jieba 从查询中提取关键词（词性标注 + 专名识别）
-- 构建/搜索倒排文本索引（单词 → 节点ID）
+- 构建/搜索倒排文本索引
 - 图路径搜索（DFS 关键词匹配）
 - 邻居展开与关系匹配
 
 数据流：
-  question → jieba 分词 → extract_query_keywords() → [kw1, kw2, ...]
-    → search_by_keywords(text_index, keywords) → 候选节点ID列表
-    → path_based_search(graph, candidates, keywords) → DFS 路径三元组
-    → get_relation_matched_triples(graph, candidates, relations) → 关系三元组
+  extract_query_keywords(question) → ["keyword1", "keyword2", ...]
+  build_node_text_index(graph, text_cache) → {word: {node_id, ...}}
+  search_by_keywords(text_index, keywords) → [node_id, ...]
+  path_based_search(graph, start_nodes, keywords) → [(h, r, t), ...]
+  get_relation_matched_triples(graph, nodes, relations) → [(h, r, t), ...]
+
+依赖：
+  - jieba.posseg：中文分词 + 词性标注
+  - NetworkX：图遍历
 """
 
 import os
@@ -111,11 +116,18 @@ def extract_query_keywords(question: str) -> List[str]:
     """从查询中提取关键词
 
     使用 jieba 分词 + 词性标注：
-    1. 专名词性（nr/ns/nt/nz）→ 等价于 spaCy NER
-    2. 常见实词词性（n/v/a 等）→ 等价于 spaCy POS 过滤
-    3. eng 词性 → 英文专名（如 Transformer, GPT）
+      1. 专名词性（nr/ns/nt/nz）→ 等价于 spaCy NER
+      2. 常见实词词性（n/v/a 等）→ 等价于 spaCy POS 过滤
+      3. eng 词性 → 英文专名（如 Transformer, GPT）
 
-    返回去重后的小写关键词列表
+    返回去重后的小写关键词列表。
+
+    Args:
+        question (`str`): 用户查询文本
+
+    Returns:
+        `List[str]`:
+            去重后的小写关键词列表，停用词和单字非专名已被过滤
     """
     keywords = []
     words = pseg.lcut(question)
@@ -145,7 +157,16 @@ def build_node_text_index(
 ) -> Dict[str, Set[str]]:
     """构建倒排索引：单词 → 包含该单词的节点ID集合
 
-    从节点文本缓存出发，按空格分词后建索引
+    从节点文本缓存出发，按空格分词后建索引。
+    每个单词会去除标点符号后作为键。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象（未使用，保留接口兼容）
+        node_text_cache (`Dict[str, str]`): {节点ID: 节点文本}
+
+    Returns:
+        `Dict[str, Set[str]]`:
+            {单词: {包含该单词的节点ID集合}}
     """
     index: Dict[str, Set[str]] = {}
     for node_id, text in node_text_cache.items():
@@ -159,6 +180,15 @@ def build_node_text_index(
 
 
 def _text_index_path(cache_dir: str, dataset: str) -> str:
+    """倒排索引 pickle 文件路径
+
+    Args:
+        cache_dir (`str`): 缓存根目录
+        dataset (`str`): 数据集名称
+
+    Returns:
+        `str`: 文件路径
+    """
     return os.path.join(cache_dir, dataset, "node_text_index.pkl")
 
 
@@ -168,7 +198,17 @@ def build_and_save_text_index(
     cache_dir: str,
     dataset: str,
 ) -> Dict[str, Set[str]]:
-    """构建倒排索引并持久化（set 转为 list 以支持 pickle）"""
+    """构建倒排索引并持久化（set 转为 list 以支持 pickle）
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象
+        node_text_cache (`Dict[str, str]`): {节点ID: 节点文本}
+        cache_dir (`str`): 缓存根目录
+        dataset (`str`): 数据集名称
+
+    Returns:
+        `Dict[str, Set[str]]`: 构建完成的倒排索引（内存格式）
+    """
     index = build_node_text_index(graph, node_text_cache)
     retriever_utils.save_pickle_cache(
         {k: list(v) for k, v in index.items()},
@@ -185,7 +225,17 @@ def load_text_index(
     cache_dir: str,
     dataset: str,
 ) -> Optional[Dict[str, Set[str]]]:
-    """加载持久化的倒排索引，校验图签名一致性"""
+    """加载持久化的倒排索引，校验图签名一致性
+
+    Args:
+        graph (`nx.MultiDiGraph`): 当前图对象（用于签名校验）
+        cache_dir (`str`): 缓存根目录
+        dataset (`str`): 数据集名称
+
+    Returns:
+        `Optional[Dict[str, Set[str]]]`:
+            {单词: {节点ID集合}}，签名不匹配或缓存缺失返回 None
+    """
     if not check_consistency(graph, cache_dir, dataset):
         return None
     raw = retriever_utils.load_pickle_cache(
@@ -200,7 +250,13 @@ def load_text_index(
 
 
 def save_text_index(index: Dict[str, Set[str]], cache_dir: str, dataset: str):
-    """持久化倒排索引"""
+    """持久化倒排索引
+
+    Args:
+        index (`Dict[str, Set[str]]`): 倒排索引（set 会被转为 list 存储）
+        cache_dir (`str`): 缓存根目录
+        dataset (`str`): 数据集名称
+    """
     serializable = {k: list(v) for k, v in index.items()}
     retriever_utils.save_pickle_cache(
         serializable,
@@ -218,7 +274,16 @@ def search_by_keywords(
 ) -> List[str]:
     """通过关键词匹配倒排索引找到候选节点
 
-    对每个关键词，取所有匹配节点的并集
+    对每个关键词，取所有匹配节点的并集。
+
+    Args:
+        text_index (`Dict[str, Set[str]]`): 倒排索引 {单词: {节点ID}}
+        keywords (`List[str]`): 查询关键词列表
+        top_k (`int`): 最大返回节点数
+
+    Returns:
+        `List[str]`:
+            匹配的节点 ID 列表，按关键词匹配度排列（非排序），最多 top_k 个
     """
     if not text_index or not keywords:
         return []
@@ -241,7 +306,18 @@ def path_based_search(
 ) -> List[Tuple[str, str, str]]:
     """DFS 路径搜索：从起始节点出发，在 max_depth 内寻找匹配关键词的路径
 
-    当某邻居节点的文本中包含目标关键词时，记录从起点到该邻居的完整路径三元组
+    当某邻居节点的文本中包含目标关键词时，记录从起点到该邻居的完整路径三元组。
+    用于发现通过多跳关系间接关联到关键词的实体。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象
+        start_nodes (`List[str]`): 起始节点 ID 列表（通常来自 FAISS 检索）
+        target_keywords (`List[str]`): 目标关键词列表
+        max_depth (`int`): 最大搜索深度
+
+    Returns:
+        `List[Tuple[str, str, str]]`:
+            [(头ID, 关系, 尾ID), ...] 路径上的所有三元组
     """
     if not target_keywords:
         return []
@@ -284,7 +360,18 @@ def get_1hop_triples(
     graph: nx.MultiDiGraph,
     node_ids: List[str],
 ) -> List[Tuple[str, str, str]]:
-    """获取指定节点集合的 1-hop 邻边三元组"""
+    """获取指定节点集合的 1-hop 邻边三元组
+
+    返回所有至少一端在 node_ids 集合中的边。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象
+        node_ids (`List[str]`): 节点 ID 列表
+
+    Returns:
+        `List[Tuple[str, str, str]]`:
+            [(头ID, 关系, 尾ID), ...]
+    """
     node_set = set(node_ids)
     triples = []
     for u, v, data in graph.edges(data=True):
@@ -299,7 +386,19 @@ def get_relation_matched_triples(
     top_nodes: List[str],
     relations: List[str],
 ) -> List[Tuple[str, str, str]]:
-    """获取同时满足关系类型匹配且端点位于 top_nodes 中的三元组"""
+    """获取同时满足关系类型匹配且端点位于 top_nodes 中的三元组
+
+    用于将 FAISS 关系检索命中的关系名回绑到候选节点上。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象
+        top_nodes (`List[str]`): 候选节点 ID 列表
+        relations (`List[str]`): FAISS 检索命中的关系名称列表
+
+    Returns:
+        `List[Tuple[str, str, str]]`:
+            [(头ID, 关系, 尾ID), ...] 关系匹配且端点匹配的三元组
+    """
     if not relations:
         return []
     top_set = set(top_nodes)

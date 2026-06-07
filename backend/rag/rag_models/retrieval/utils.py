@@ -1,3 +1,41 @@
+"""检索模块通用工具函数
+
+功能：
+- 设备解析（CUDA/CPU）
+- 嵌入缓存保存/加载（支持 .pt 和 .npz 格式）
+- pickle 缓存保存/加载（带可选 consistency 校验）
+- 余弦相似度批量计算
+- FAISS 中文路径安全映射（MD5 哈希）
+- LRU 缓存淘汰
+- 节点文本提取工具（extract_node_name_and_description / is_valid_node_text）
+
+数据流（嵌入缓存）：
+  save_embedding_cache({key: tensor}, path)
+    → 先尝试 torch.save 保存为 .pt
+    → 失败则 fallback 为 np.savez_compressed 保存为 .npz
+  load_embedding_cache(path, device)
+    → 先尝试 .npz 加载 → 再尝试 .pt 加载
+    → 返回 {key: tensor} 或 None
+
+数据流（pickle 缓存）：
+  save_pickle_cache(dict, cache_dir, dataset, name)
+    → 写入 pickle 文件
+  load_pickle_cache(cache_dir, dataset, name, expected_keys)
+    → 读取 pickle 文件
+    → 可选校验 expected_keys 一致性
+
+FAISS 中文路径处理：
+  safe_faiss_path(original_path, cache_root)
+    → 检测路径是否含非 ASCII 字符
+    → 如果是，用 MD5 哈希生成安全文件名
+    → 记录映射到 faiss_path_mapping.json
+
+字符串工具：
+  sanitize_string_field(value) → str
+  extract_node_name_and_description(node_data) → (name, desc)
+  is_valid_node_text(text) → bool
+"""
+
 import hashlib
 import json
 import os
@@ -9,8 +47,19 @@ import torch
 import torch.nn.functional as F
 
 
+# ─── 设备 ───
+
+
 def resolve_device(device: Optional[str] = None) -> torch.device:
-    """Unified device resolution logic."""
+    """统一的设备解析
+
+    Args:
+        device (`str`, optional):
+            目标设备名（"cuda" / "cpu"），默认自动检测
+
+    Returns:
+        `torch.device`: 解析后的设备对象
+    """
     if device is not None:
         if device == "cuda" and not torch.cuda.is_available():
             import logging
@@ -24,7 +73,14 @@ def resolve_device(device: Optional[str] = None) -> torch.device:
 
 
 def resolve_device_str(device: Optional[str] = None) -> str:
-    """Unified device resolution returning a plain string (for KTRetriever compat)."""
+    """统一的设备解析（返回字符串）
+
+    Args:
+        device (`str`, optional): 目标设备名
+
+    Returns:
+        `str`: "cuda" 或 "cpu" 字符串
+    """
     if device is not None:
         if device == "cuda":
             return "cuda" if torch.cuda.is_available() else "cpu"
@@ -32,8 +88,18 @@ def resolve_device_str(device: Optional[str] = None) -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
+# ─── 字符串工具 ───
+
+
 def sanitize_string_field(value: Any) -> str:
-    """Normalize a field value (str, list, or other) into a clean string."""
+    """将字段值规范化为干净的字符串
+
+    Args:
+        value: 任意值（str / list 等）
+
+    Returns:
+        `str`: 规范化后的字符串，None 或空时返回空字符串
+    """
     if not value:
         return ""
     if isinstance(value, list):
@@ -41,10 +107,65 @@ def sanitize_string_field(value: Any) -> str:
     return str(value).strip()
 
 
+def extract_node_name_and_description(
+    node_data: dict,
+) -> tuple[str, str]:
+    """从节点数据中提取 name 和 description，统一处理新旧数据结构。
+
+    新格式：{"properties": {"name": "...", "description": "..."}}
+    旧格式：{"name": "...", "description": "..."}
+
+    Args:
+        node_data (`dict`): 图节点的 data 字典
+
+    Returns:
+        `tuple[str, str]`: (name, description)，缺失时为空字符串
+    """
+    if "properties" in node_data and isinstance(node_data["properties"], dict):
+        name = sanitize_string_field(node_data["properties"].get("name", ""))
+        description = sanitize_string_field(
+            node_data["properties"].get("description", "")
+        )
+    else:
+        name = sanitize_string_field(node_data.get("name", ""))
+        description = sanitize_string_field(node_data.get("description", ""))
+    return name, description
+
+
+def is_valid_node_text(text: str) -> bool:
+    """检查节点文本是否可用于嵌入计算
+
+    排除空文本和错误标记文本。
+
+    Args:
+        text (`str`): 待检查文本
+
+    Returns:
+        `bool`: True 表示可用于编码
+    """
+    return bool(
+        text and not text.startswith("[Error") and not text.startswith("[Unknown")
+    )
+
+
+# ─── Torch 安全加载 ───
+
+
 def torch_safe_load(
     filepath: str, map_location: str = "cpu", weights_only: bool = False
 ) -> Optional[Dict]:
-    """Load a torch checkpoint with PyTorch 2.6+ compatibility."""
+    """安全的 torch.load（兼容 PyTorch 2.6+）
+
+    处理 numpy._reconstruct 兼容性问题。
+
+    Args:
+        filepath (`str`): 文件路径
+        map_location (`str`): 映射设备（默认 cpu）
+        weights_only (`bool`): 是否仅加载权重（默认 False）
+
+    Returns:
+        `Optional[Dict]`: 加载的字典数据，失败返回 None
+    """
     try:
         return torch.load(
             filepath, map_location=map_location, weights_only=weights_only
@@ -66,12 +187,27 @@ def torch_safe_load(
         raise e
 
 
+# ─── 嵌入缓存 I/O ───
+
+
 def save_embedding_cache(
     cache: Dict[Any, Any],
     filepath: str,
     logger=None,
 ) -> bool:
-    """Unified embedding cache save with torch/numpy fallback."""
+    """统一的嵌入缓存保存（优先 .pt，fallback .npz）
+
+    输入 cache 为 {key: tensor/ndarray}，
+    内部统一转为 numpy 后再决定存储格式。
+
+    Args:
+        cache (`Dict[Any, Any]`): {key: tensor/ndarray}
+        filepath (`str`): 目标文件路径（.pt 或 .npz）
+        logger: 可选的 logger 实例
+
+    Returns:
+        `bool`: 保存成功返回 True
+    """
     try:
         if not cache:
             return False
@@ -126,7 +262,19 @@ def load_embedding_cache(
     device: Union[str, torch.device],
     logger=None,
 ) -> Optional[Dict[Any, torch.Tensor]]:
-    """Unified embedding cache loading with npz/torch/pt support."""
+    """统一的嵌入缓存加载（先试 .npz，再试 .pt）
+
+    自动清理损坏的小文件（< 1000 bytes）。
+
+    Args:
+        filepath (`str`): 缓存文件路径（.pt）
+        device (`Union[str, torch.device]`): 目标设备
+        logger: 可选的 logger 实例
+
+    Returns:
+        `Optional[Dict[Any, torch.Tensor]]`:
+            {key: tensor} 已移至目标设备，加载失败返回 None
+    """
     filepath_npz = filepath.replace(".pt", ".npz")
 
     def _numpy_load(npz_path: str):
@@ -229,6 +377,9 @@ def load_embedding_cache(
     return result if result else None
 
 
+# ─── 缓存一致性 ───
+
+
 def check_cache_consistency(
     current_set: Set,
     cached_set: Set,
@@ -236,7 +387,20 @@ def check_cache_consistency(
     tolerance: float = 0.1,
     logger=None,
 ) -> bool:
-    """Check if a cache's keys are consistent with the current data."""
+    """检查缓存键集合与当前数据是否一致
+
+    允许一定比例的额外条目（容忍度）。
+
+    Args:
+        current_set (`Set`): 当前数据的键集合
+        cached_set (`Set`): 缓存的键集合
+        name (`str`): 缓存名称（日志用）
+        tolerance (`float`): 额外条目容忍比例
+        logger: logger 实例
+
+    Returns:
+        `bool`: True 表示一致
+    """
     try:
         missing = current_set - cached_set
         if missing:
@@ -260,8 +424,42 @@ def check_cache_consistency(
         return False
 
 
+def check_cache_consistency_simple(
+    current_set: Set,
+    cache_dict: Dict,
+    name: str = "cache",
+    logger=None,
+) -> bool:
+    """检查缓存字典的键与当前数据集是否一致（简化版）
+
+    Args:
+        current_set (`Set`): 当前数据的键集合
+        cache_dict (`Dict`): 缓存字典（只检查键）
+        name (`str`): 缓存名称
+        logger: logger 实例
+
+    Returns:
+        `bool`: True 表示一致
+    """
+    return check_cache_consistency(
+        current_set, set(cache_dict.keys()), name=name, logger=logger
+    )
+
+
+# ─── LRU 缓存淘汰 ───
+
+
 def evict_lru_cache(cache: Dict, max_size: int, strategy: str = "oldest") -> None:
-    """Evict entries from a dict cache when it exceeds max_size."""
+    """当缓存超过最大大小时淘汰条目
+
+    Args:
+        cache (`Dict`): 待管理的缓存字典（会被原地修改）
+        max_size (`int`): 最大条目数
+        strategy (`str`):
+            淘汰策略：
+            - "oldest"（默认）：删除最旧的条目
+            - "recent"：保留最近的条目
+    """
     if len(cache) <= max_size:
         return
     if strategy == "oldest":
@@ -276,8 +474,16 @@ def evict_lru_cache(cache: Dict, max_size: int, strategy: str = "oldest") -> Non
             del cache[key]
 
 
+# ─── 文件安全删除 ───
+
+
 def remove_file_safe(filepath: str, logger=None) -> None:
-    """Safely remove a file, logging any errors."""
+    """安全删除文件，记录错误
+
+    Args:
+        filepath (`str`): 要删除的文件路径
+        logger: logger 实例
+    """
     try:
         if os.path.exists(filepath):
             os.remove(filepath)
@@ -286,36 +492,10 @@ def remove_file_safe(filepath: str, logger=None) -> None:
             logger.warning(f"Failed to remove {filepath}: {e}")
 
 
-SCHEMA_SKIP_FIELDS = {
-    "name",
-    "description",
-    "properties",
-    "label",
-    "chunk id",
-    "level",
-}
+safe_remove = remove_file_safe  # 别名
 
 
-def extract_node_name_and_description(
-    node_data: dict,
-) -> tuple[str, str]:
-    """从节点数据中提取 name 和 description，统一处理新旧数据结构。"""
-    if "properties" in node_data and isinstance(node_data["properties"], dict):
-        name = sanitize_string_field(node_data["properties"].get("name", ""))
-        description = sanitize_string_field(
-            node_data["properties"].get("description", "")
-        )
-    else:
-        name = sanitize_string_field(node_data.get("name", ""))
-        description = sanitize_string_field(node_data.get("description", ""))
-    return name, description
-
-
-def is_valid_node_text(text: str) -> bool:
-    """Check if node text is valid for embedding computation."""
-    return bool(
-        text and not text.startswith("[Error") and not text.startswith("[Unknown")
-    )
+# ─── 余弦相似度 ───
 
 
 def batch_compute_similarities(
@@ -323,7 +503,17 @@ def batch_compute_similarities(
     embeddings_list: List[torch.Tensor],
     names: List[str],
 ) -> Dict[str, float]:
-    """批量计算 query 与多个 embeddings 的余弦相似度。"""
+    """批量计算 query 与多个 embeddings 的余弦相似度
+
+    Args:
+        query_embed (`torch.Tensor`): 查询嵌入向量
+        embeddings_list (`List[torch.Tensor]`): 待比较的嵌入向量列表
+        names (`List[str]`): 对应名称（作为返回字典的键）
+
+    Returns:
+        `Dict[str, float]`:
+            {name: cosine_similarity}，相似度被 clamp 到 [0.0, ...]
+    """
     if not embeddings_list:
         return {}
     embeddings_tensor = torch.stack(embeddings_list)
@@ -333,26 +523,7 @@ def batch_compute_similarities(
     return {names[i]: max(0.0, similarities[i].item()) for i in range(len(names))}
 
 
-def check_cache_consistency_simple(
-    current_set: Set,
-    cache_dict: Dict,
-    name: str = "cache",
-    logger=None,
-) -> bool:
-    """Check if a cache dict's keys are consistent with the current data set."""
-    return check_cache_consistency(
-        current_set, set(cache_dict.keys()), name=name, logger=logger
-    )
-
-
-def safe_remove(filepath: str, logger=None) -> None:
-    """Safely remove a file, logging any errors."""
-    try:
-        if os.path.exists(filepath):
-            os.remove(filepath)
-    except Exception as e:
-        if logger:
-            logger.warning(f"Failed to remove {filepath}: {e}")
+# ─── pickle 缓存 I/O ───
 
 
 def save_pickle_cache(
@@ -362,7 +533,18 @@ def save_pickle_cache(
     name: str,
     logger=None,
 ) -> bool:
-    """泛型 pickle 缓存保存。"""
+    """泛型 pickle 缓存保存
+
+    Args:
+        cache (`Dict`): 待保存的字典
+        cache_dir (`str`): 缓存根目录
+        dataset (`str`): 数据集名称
+        name (`str`): 缓存名称（用作文件名）
+        logger: logger 实例
+
+    Returns:
+        `bool`: 保存成功返回 True
+    """
     path = f"{cache_dir}/{dataset}/{name}.pkl"
     try:
         if not cache:
@@ -386,7 +568,23 @@ def load_pickle_cache(
     expected_keys: Set = None,
     logger=None,
 ) -> Optional[Dict]:
-    """泛型 pickle 缓存加载。"""
+    """泛型 pickle 缓存加载
+
+    自动校验文件大小（< 1000 bytes 视为损坏），
+    可选校验 expected_keys 一致性。
+
+    Args:
+        cache_dir (`str`): 缓存根目录
+        dataset (`str`): 数据集名称
+        name (`str`): 缓存名称（文件名）
+        expected_keys (`Set`, optional):
+            期望的键集合，如果提供且不匹配则返回 None
+        logger: logger 实例
+
+    Returns:
+        `Optional[Dict]`:
+            加载的字典数据，损坏或不一致返回 None
+    """
     path = f"{cache_dir}/{dataset}/{name}.pkl"
     if not os.path.exists(path):
         return None
@@ -411,11 +609,25 @@ def load_pickle_cache(
         return None
 
 
+# ─── FAISS 中文路径处理 ───
+
 _FAISS_PATH_MAPPING_CACHE: Dict[str, str] = {}
 
 
 def safe_faiss_path(original_path: str, cache_root: str) -> str:
-    """将含非 ASCII 字符的路径转为纯 ASCII 安全路径，FAISS C++ I/O 不支持中文路径。"""
+    """将含非 ASCII 字符的路径转为纯 ASCII 安全路径
+
+    FAISS 的 C++ I/O 不支持中文路径。检测到非 ASCII 字符时，
+    用 MD5 哈希生成安全文件名，存储在 cache_root/.faiss_safe/ 目录下，
+    并将映射关系记录到 faiss_path_mapping.json。
+
+    Args:
+        original_path (`str`): 原始路径（可能含中文）
+        cache_root (`str`): 缓存根目录
+
+    Returns:
+        `str`: ASCII 安全路径（无中文时返回原路径）
+    """
     if not any(ord(c) > 127 for c in original_path):
         return original_path
 
@@ -431,7 +643,15 @@ def safe_faiss_path(original_path: str, cache_root: str) -> str:
 
 
 def faiss_path_exists(original_path: str, cache_root: str) -> bool:
-    """检测 FAISS 文件是否存在，自动处理中文路径到安全路径的映射。"""
+    """检测 FAISS 文件是否存在，自动处理中文路径到安全路径的映射
+
+    Args:
+        original_path (`str`): 原始路径
+        cache_root (`str`): 缓存根目录
+
+    Returns:
+        `bool`: True 表示文件存在
+    """
     if not any(ord(c) > 127 for c in original_path):
         return os.path.exists(original_path)
     safe_path = safe_faiss_path(original_path, cache_root)
@@ -439,7 +659,15 @@ def faiss_path_exists(original_path: str, cache_root: str) -> bool:
 
 
 def _record_faiss_path_mapping(orig: str, safe: str, cache_root: str):
-    """记录中文路径 → 安全路径的映射到 JSON 字典。"""
+    """记录中文路径 → 安全路径的映射到 JSON 字典
+
+    确保同一文件在不同 session 中被映射到一致的 ASCII 路径。
+
+    Args:
+        orig (`str`): 原始中文路径
+        safe (`str`): 映射后的 ASCII 路径
+        cache_root (`str`): 缓存根目录
+    """
     mapping_file = os.path.join(cache_root, "faiss_path_mapping.json")
     try:
         mapping = dict(_FAISS_PATH_MAPPING_CACHE)
@@ -456,3 +684,13 @@ def _record_faiss_path_mapping(orig: str, safe: str, cache_root: str):
         _FAISS_PATH_MAPPING_CACHE.update(mapping)
     except Exception:
         pass
+
+
+SCHEMA_SKIP_FIELDS = {
+    "name",
+    "description",
+    "properties",
+    "label",
+    "chunk id",
+    "level",
+}

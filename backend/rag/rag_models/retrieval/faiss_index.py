@@ -16,6 +16,11 @@
     → build_all_indices() → FAISSIndexSet
     → save_index_set() / load_index_set() → 磁盘持久化
     → search_nodes() / search_relations() / search_triples() / search_communities()
+
+图签名机制：
+  - compute_graph_signature() 根据节点集+边集计算 MD5
+  - 所有缓存（FAISS/文本/倒排）共享此签名
+  - 图变更 → 签名不匹配 → 全量重建
 """
 
 import hashlib
@@ -37,24 +42,57 @@ from loguru import logger
 class FAISSIndexSet:
     """四种 FAISS 索引的聚合容器
 
-    每种索引对应一个 FAISS IndexFlatIP（内积 = 归一化后的余弦相似度）
+    每种索引对应一个 FAISS IndexFlatIP（内积 = 归一化后的余弦相似度）。
+    四个 map 将 FAISS 内部索引位置映射回图节点/三元组标识。
+
+    Attributes:
+        node_index (`faiss.Index`):
+            节点语义索引，编码文本 = name,description
+        relation_index (`faiss.Index`):
+            关系名索引，编码文本 = 关系名称
+        triple_index (`faiss.Index`):
+            三元组语义索引，编码文本 = head_name,relation,tail_name
+        comm_index (`faiss.Index`):
+            社区索引，编码文本 = comm_name,comm_description
+        node_map (`Dict[int, str]`):
+            {FAISS 索引位置: 节点 ID}
+        relation_map (`Dict[int, str]`):
+            {FAISS 索引位置: 关系名称}
+        triple_map (`Dict[int, Tuple]`):
+            {FAISS 索引位置: (头节点ID, 关系, 尾节点ID)}
+        comm_map (`Dict[int, str]`):
+            {FAISS 索引位置: 社区节点 ID}
+        graph_signature (`str`):
+            构建时的图 MD5 签名，用于缓存一致性校验
     """
 
-    node_index: faiss.Index  # 节点索引：按 name,description 构建
-    relation_index: faiss.Index  # 关系索引：按关系名构建
-    triple_index: faiss.Index  # 三元组索引：按 "头,关系,尾" 文本构建
-    comm_index: faiss.Index  # 社区索引：按社区 name,description 构建
-    node_map: Dict[int, str]  # {FAISS索引位置: 节点ID}
-    relation_map: Dict[int, str]  # {FAISS索引位置: 关系名称}
-    triple_map: Dict[int, Tuple]  # {FAISS索引位置: (头ID, 关系, 尾ID)}
-    comm_map: Dict[int, str]  # {FAISS索引位置: 社区节点ID}
-    graph_signature: str = ""  # 构建时的图签名，用于一致性校验
+    node_index: faiss.Index
+    relation_index: faiss.Index
+    triple_index: faiss.Index
+    comm_index: faiss.Index
+    node_map: Dict[int, str]
+    relation_map: Dict[int, str]
+    triple_map: Dict[int, Tuple]
+    comm_map: Dict[int, str]
+    graph_signature: str = ""
+
+
+# ─── 图签名 ───
 
 
 def compute_graph_signature(graph: nx.MultiDiGraph) -> str:
     """计算图的唯一签名（MD5）
 
-    对节点ID列表和边（u:relation:v）排序后拼接，用于判断图是否有变更
+    对节点ID排序列表和边 (u:relation:v) 排序列表拼接后取 MD5。
+    用于判断图是否发生变更，从而决定缓存是否失效。
+
+    Args:
+        graph (`nx.MultiDiGraph`):
+            知识图谱 NetworkX 图对象
+
+    Returns:
+        `str`:
+            32 字符 MD5 十六进制字符串
     """
     node_ids = sorted(graph.nodes())
     edges = sorted(
@@ -64,13 +102,33 @@ def compute_graph_signature(graph: nx.MultiDiGraph) -> str:
     return hashlib.md5(content.encode()).hexdigest()
 
 
+# ─── 一致性令牌 ───
+
+
 def _consistency_path(cache_dir: str, dataset: str) -> str:
-    """一致性令牌文件路径"""
+    """一致性令牌文件路径
+
+    Args:
+        cache_dir (`str`): 缓存根目录
+        dataset (`str`): 数据集名称
+
+    Returns:
+        `str`: 令牌文件绝对路径
+    """
     return os.path.join(cache_dir, dataset, "_consistency.json")
 
 
 def _load_consistency_token(cache_dir: str, dataset: str) -> Optional[str]:
-    """读取缓存的图签名，返回 None 表示无缓存"""
+    """读取缓存的图签名
+
+    Args:
+        cache_dir (`str`): 缓存根目录
+        dataset (`str`): 数据集名称
+
+    Returns:
+        `Optional[str]`:
+            缓存中的图签名 MD5，若文件不存在或损坏则返回 None
+    """
     path = _consistency_path(cache_dir, dataset)
     if not os.path.exists(path):
         return None
@@ -83,7 +141,13 @@ def _load_consistency_token(cache_dir: str, dataset: str) -> Optional[str]:
 
 
 def _save_consistency_token(cache_dir: str, dataset: str, graph_signature: str):
-    """持久化图签名 + 构建时间"""
+    """持久化图签名 + 构建时间
+
+    Args:
+        cache_dir (`str`): 缓存根目录
+        dataset (`str`): 数据集名称
+        graph_signature (`str`): 当前图的 MD5 签名
+    """
     path = _consistency_path(cache_dir, dataset)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
@@ -94,7 +158,15 @@ def check_consistency(graph: nx.MultiDiGraph, cache_dir: str, dataset: str) -> b
     """检查缓存的图签名与当前图是否匹配
 
     所有缓存（FAISS 索引、文本缓存、倒排索引）共享此校验，
-    一旦图变更 → 全量失效 → 全量重建
+    一旦图变更 → 全量失效 → 全量重建。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 当前图对象
+        cache_dir (`str`): 缓存根目录
+        dataset (`str`): 数据集名称
+
+    Returns:
+        `bool`: True 表示缓存有效，False 表示需要重建
     """
     cached_sig = _load_consistency_token(cache_dir, dataset)
     if cached_sig is None:
@@ -102,10 +174,21 @@ def check_consistency(graph: nx.MultiDiGraph, cache_dir: str, dataset: str) -> b
     return cached_sig == compute_graph_signature(graph)
 
 
+# ─── 工具函数 ───
+
+
 def _get_node_text_simple(graph: nx.MultiDiGraph, node_id: str) -> str:
     """获取节点文本（简化版，仅用于构建 FAISS 索引时）
 
-    与 text_processor.get_node_text 不同，这里使用逗号分隔
+    与 text_processor.get_node_text 不同，这里使用逗号分隔，
+    不包含 description 后的空格。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象
+        node_id (`str`): 节点ID
+
+    Returns:
+        `str`: "name,description" 格式的文本
     """
     data = graph.nodes[node_id]
     name, desc = retriever_utils.extract_node_name_and_description(data)
@@ -121,8 +204,20 @@ def build_node_index(
 ) -> Tuple[faiss.Index, Dict[int, str]]:
     """构建节点 FAISS 索引
 
-    输入：所有图节点的 name+description 文本
-    输出：IndexFlatIP + {索引位置: 节点ID} 映射
+    流程：
+      1. 遍历图中所有节点，提取 name+description 文本
+      2. 用 SentenceTransformer 编码为稠密向量
+      3. 构建 IndexFlatIP（内积 = L2 归一化后的余弦相似度）
+      4. 建立 {索引位置: 节点ID} 映射
+
+    Args:
+        graph (`nx.MultiDiGraph`): 知识图谱
+        encoder: SentenceTransformer 编码器实例
+
+    Returns:
+        `Tuple[faiss.Index, Dict[int, str]]`:
+            - faiss.Index: 节点语义索引
+            - Dict[int, str]: {FAISS 内部索引: 节点 ID}
     """
     nodes = list(graph.nodes())
     texts = [_get_node_text_simple(graph, n) for n in nodes]
@@ -140,7 +235,13 @@ def _detect_dim(encoder) -> int:
     """获取编码器输出维度
 
     优先使用 SentenceTransformer 的 get_sentence_embedding_dimension，
-    fallback 通过编码空字符串检测
+    fallback 通过编码空字符串检测。
+
+    Args:
+        encoder: 编码器实例
+
+    Returns:
+        `int`: 嵌入向量的维度
     """
     try:
         return encoder.get_sentence_embedding_dimension()
@@ -156,7 +257,17 @@ def build_relation_index(
 ) -> Tuple[faiss.Index, Dict[int, str]]:
     """构建关系 FAISS 索引
 
-    输入：图中出现的所有不重复关系名称
+    输入：图中出现的所有不重复关系名称。
+    输出：IndexFlatIP + {索引位置: 关系名称}。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 知识图谱
+        encoder: SentenceTransformer 编码器
+
+    Returns:
+        `Tuple[faiss.Index, Dict[int, str]]`:
+            - faiss.Index: 关系名索引
+            - Dict[int, str]: {FAISS 内部索引: 关系名称}
     """
     relations = sorted(
         {
@@ -184,8 +295,21 @@ def build_triple_index(
 ) -> Tuple[faiss.Index, Dict[int, Tuple]]:
     """构建三元组 FAISS 索引
 
-    输入：所有边的关系三元组 (头ID, 关系名称, 尾ID)
-    索引文本格式："头节点name,关系名称,尾节点name"
+    输入：所有边的关系三元组 (头ID, 关系名称, 尾ID)。
+    索引文本格式："头节点name,关系名称,尾节点name"。
+
+    .. note::
+        节点 name 在此处会被重新编码，与 build_node_index 存在重复计算。
+        大图场景下可考虑复用节点嵌入以节省时间。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 知识图谱
+        encoder: SentenceTransformer 编码器
+
+    Returns:
+        `Tuple[faiss.Index, Dict[int, Tuple]]`:
+            - faiss.Index: 三元组语义索引
+            - Dict[int, Tuple]: {FAISS 内部索引: (头ID, 关系, 尾ID)}
     """
     triples = []
     for u, v, data in graph.edges(data=True):
@@ -214,7 +338,17 @@ def build_community_index(
 ) -> Tuple[faiss.Index, Dict[int, str]]:
     """构建社区 FAISS 索引
 
-    输入：所有 label="community" 节点的 name+description 文本
+    输入：所有 label="community" 节点的 name+description 文本。
+    跳过名称和描述均为空的社区节点。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 知识图谱（含社区超节点）
+        encoder: SentenceTransformer 编码器
+
+    Returns:
+        `Tuple[faiss.Index, Dict[int, str]]`:
+            - faiss.Index: 社区索引
+            - Dict[int, str]: {FAISS 内部索引: 社区节点 ID}
     """
     communities = [
         n for n, d in graph.nodes(data=True) if d.get("label") == "community"
@@ -243,7 +377,17 @@ def build_community_index(
 
 
 def build_all_indices(graph: nx.MultiDiGraph, encoder) -> FAISSIndexSet:
-    """一站式构建全部四种 FAISS 索引"""
+    """一站式构建全部四种 FAISS 索引
+
+    顺序构建节点、关系、三元组、社区索引，计算图签名后聚合为 FAISSIndexSet。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 知识图谱
+        encoder: SentenceTransformer 编码器
+
+    Returns:
+        `FAISSIndexSet`: 四种索引 + 映射 + 图签名
+    """
     node_index, node_map = build_node_index(graph, encoder)
     relation_index, relation_map = build_relation_index(graph, encoder)
     triple_index, triple_map = build_triple_index(graph, encoder)
@@ -266,12 +410,33 @@ def build_all_indices(graph: nx.MultiDiGraph, encoder) -> FAISSIndexSet:
 
 
 def _safe_faiss_path(original_path: str, cache_root: str) -> str:
-    """FAISS 的 C++ I/O 不支持中文路径，做 ASCII 安全映射"""
+    """FAISS 的 C++ I/O 不支持中文路径，做 ASCII 安全映射
+
+    委托给 retriever_utils.safe_faiss_path 处理。
+
+    Args:
+        original_path (`str`): 原始路径（可能含中文）
+        cache_root (`str`): 缓存根目录
+
+    Returns:
+        `str`: ASCII 安全路径
+    """
     return retriever_utils.safe_faiss_path(original_path, cache_root)
 
 
 def save_index_set(index_set: FAISSIndexSet, cache_dir: str, dataset: str):
-    """将四个 FAISS 索引 + 映射文件 + 一致性令牌写入磁盘"""
+    """将四个 FAISS 索引 + 映射文件 + 一致性令牌写入磁盘
+
+    磁盘文件结构（cache_dir/dataset/）：
+      - node.index, relation.index, triple.index, comm.index  — FAISS 二进制索引
+      - node_map.json, relation_map.json, triple_map.json, comm_map.json  — JSON 映射
+      - _consistency.json  — 图签名令牌
+
+    Args:
+        index_set (`FAISSIndexSet`): 待持久化的索引集合
+        cache_dir (`str`): 缓存根目录
+        dataset (`str`): 数据集名称
+    """
     os.makedirs(os.path.join(cache_dir, dataset), exist_ok=True)
     root = cache_dir
 
@@ -305,8 +470,20 @@ def load_index_set(
 ) -> Optional[FAISSIndexSet]:
     """从磁盘加载 FAISS 索引
 
-    先校验图签名，匹配则加载，否则返回 None 触发重建。
-    任意索引文件缺失也会返回 None。
+    流程：
+      1. 先校验图签名是否匹配
+      2. 加载 4 个 index + 4 个 map（缺一不可）
+      3. 重新计算当前图签名写入返回对象
+
+    Args:
+        graph (`nx.MultiDiGraph`): 当前图对象（用于签名校验和计算）
+        cache_dir (`str`): 缓存根目录
+        dataset (`str`): 数据集名称
+
+    Returns:
+        `Optional[FAISSIndexSet]`:
+            - 成功加载返回 FAISSIndexSet
+            - 签名不匹配或文件缺失返回 None（触发上游重建）
     """
     if not check_consistency(graph, cache_dir, dataset):
         logger.info(
@@ -367,7 +544,19 @@ def search_nodes(
     query_embed: np.ndarray,
     top_k: int,
 ) -> List[str]:
-    """在节点索引中搜索 top-k 节点，返回节点 ID 列表"""
+    """在节点索引中搜索 top-k 节点
+
+    搜索数量为 min(top_k * 3, 节点总数)，保证召回率后再由上层筛选。
+
+    Args:
+        index_set (`FAISSIndexSet`): FAISS 索引集合
+        query_embed (`np.ndarray`): 查询向量 (1, dim)
+        top_k (`int`): 目标返回数量
+
+    Returns:
+        `List[str]`:
+            节点 ID 列表，按 FAISS 相似度降序，最多 top_k*3 个
+    """
     query_np = query_embed.reshape(1, -1).astype("float32")
     search_k = min(top_k * 3, len(index_set.node_map))
     if search_k <= 0:
@@ -385,7 +574,17 @@ def search_relations(
     query_embed: np.ndarray,
     top_k: int,
 ) -> List[str]:
-    """在关系索引中搜索 top-k 关系，返回关系名称列表"""
+    """在关系索引中搜索 top-k 关系
+
+    Args:
+        index_set (`FAISSIndexSet`): FAISS 索引集合
+        query_embed (`np.ndarray`): 查询向量 (1, dim)
+        top_k (`int`): 返回数量
+
+    Returns:
+        `List[str]`:
+            关系名称列表，按 FAISS 相似度降序
+    """
     query_np = query_embed.reshape(1, -1).astype("float32")
     search_k = min(top_k, len(index_set.relation_map))
     if search_k <= 0:
@@ -403,7 +602,17 @@ def search_triples(
     query_embed: np.ndarray,
     top_k: int,
 ) -> List[Tuple[str, str, str]]:
-    """在三元组索引中搜索 top-k 三元组，返回 (头ID, 关系, 尾ID) 列表"""
+    """在三元组索引中搜索 top-k 三元组
+
+    Args:
+        index_set (`FAISSIndexSet`): FAISS 索引集合
+        query_embed (`np.ndarray`): 查询向量 (1, dim)
+        top_k (`int`): 返回数量
+
+    Returns:
+        `List[Tuple[str, str, str]]`:
+            [(头节点ID, 关系名称, 尾节点ID), ...] 按 FAISS 相似度降序
+    """
     query_np = query_embed.reshape(1, -1).astype("float32")
     search_k = min(top_k * 2, len(index_set.triple_map))
     if search_k <= 0:
@@ -421,7 +630,17 @@ def search_communities(
     query_embed: np.ndarray,
     top_k: int,
 ) -> List[str]:
-    """在社区索引中搜索 top-k 社区，返回社区节点 ID 列表"""
+    """在社区索引中搜索 top-k 社区
+
+    Args:
+        index_set (`FAISSIndexSet`): FAISS 索引集合
+        query_embed (`np.ndarray`): 查询向量 (1, dim)
+        top_k (`int`): 返回数量
+
+    Returns:
+        `List[str]`:
+            社区节点 ID 列表，按 FAISS 相似度降序
+    """
     query_np = query_embed.reshape(1, -1).astype("float32")
     search_k = min(top_k, len(index_set.comm_map))
     if search_k <= 0:

@@ -9,13 +9,13 @@
 6. 合并所有节点并评分
 
 数据流：
-  query_embed → _retrieve_via_triples:
-    ├─ search_triples_hard(triple_index) → 命中三元组 (带 3-hop BFS 展开)
-    └─ _score_triples_via_faiss(triple_index) → scored_triples
-  → _retrieve_via_communities:
-    ├─ search_communities(comm_index) → 命中社区
-    └─ get_community_nodes() → 社区成员节点
-  → 合并 → {triple_nodes, comm_nodes, scored_triples}
+  retrieve_path2(graph, index_set, query_embed, top_k, name_to_id)
+    → {
+        "triple_nodes": [node_id, ...],        # 三元组路径途经的节点
+        "comm_nodes": [node_id, ...],           # 社区展开的成员节点
+        "scores": {node_id: 0.5},               # 节点评分（当前为 fallback 常数）
+        "scored_triples": [(h, r, t, score), ...]  # 带评分的三元组（供合并使用）
+      }
 """
 
 from collections import deque
@@ -30,7 +30,14 @@ from rag.rag_models.retrieval.community_utils import get_community_nodes
 
 
 def _deduplicate_triples(triples: List[Tuple]) -> List[Tuple]:
-    """三元组去重（保留首次出现顺序）"""
+    """三元组去重（保留首次出现顺序）
+
+    Args:
+        triples (`List[Tuple]`): 三元组列表
+
+    Returns:
+        `List[Tuple]`: 去重后的三元组
+    """
     seen = set()
     result = []
     for t in triples:
@@ -45,7 +52,18 @@ def _get_3hop_neighbors(
     center: str,
     cache: Dict = None,
 ) -> Set[str]:
-    """BFS 3-hop 邻居展开（带缓存）"""
+    """BFS 3-hop 邻居展开（带缓存）
+
+    从 center 节点出发，广度优先搜索 3 层范围内的所有节点。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象
+        center (`str`): 起始节点 ID
+        cache (`Dict`, optional): {节点ID: 邻居集合} 缓存
+
+    Returns:
+        `Set[str]`: 3-hop 范围内的所有节点 ID（含自身）
+    """
     if cache is None:
         cache = {}
     if center in cache:
@@ -74,7 +92,18 @@ def _collect_neighbor_triples(
     node: str,
     hop_cache: Dict = None,
 ) -> List[Tuple]:
-    """收集一个节点 3-hop 范围内的所有三元组"""
+    """收集一个节点 3-hop 范围内的所有三元组
+
+    遍历出边和入边，提取有关关系的三元组。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象
+        node (`str`): 中心节点 ID
+        hop_cache (`Dict`, optional): 邻居展开缓存
+
+    Returns:
+        `List[Tuple]`: [(头ID, 关系, 尾ID), ...]
+    """
     if node not in graph.nodes:
         return []
     neighbor_triples = []
@@ -96,7 +125,19 @@ def _retrieve_via_triples(
     top_k: int,
     hop_cache: Dict = None,
 ) -> List[Tuple[str, str, str, float]]:
-    """通过三元组索引检索：搜索 → 3-hop 展开 → FAISS 重评分"""
+    """通过三元组索引检索：搜索 → 3-hop 展开 → FAISS 重评分
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象
+        index_set (`FAISSIndexSet`): FAISS 索引集合
+        query_embed (`torch.Tensor`): 查询嵌入
+        top_k (`int`): top-k
+        hop_cache (`Dict`, optional): BFS 邻居缓存
+
+    Returns:
+        `List[Tuple[str, str, str, float]]`:
+            [(头ID, 关系, 尾ID, FAISS 评分), ...]
+    """
     matched = list(search_triples_hard(index_set, query_embed, top_k))
     all_triples = list(matched)
     for h, r, t in matched:
@@ -112,7 +153,17 @@ def search_triples_hard(
     query_embed: torch.Tensor,
     top_k: int,
 ) -> List[Tuple[str, str, str]]:
-    """搜索三元组索引，返回 (头ID, 关系, 尾ID) 列表"""
+    """搜索三元组索引，返回 (头ID, 关系, 尾ID) 列表
+
+    Args:
+        index_set (`FAISSIndexSet`): FAISS 索引集合
+        query_embed (`torch.Tensor`): 查询嵌入
+        top_k (`int`): 搜索数量（内部翻倍 x2）
+
+    Returns:
+        `List[Tuple[str, str, str]]`:
+            [(头ID, 关系, 尾ID), ...] 按 FAISS 原始排序
+    """
     query_np = query_embed.cpu().numpy().reshape(1, -1).astype("float32")
     search_k = min(top_k * 2, len(index_set.triple_map))
     if search_k <= 0:
@@ -136,7 +187,17 @@ def _score_triples_via_faiss(
 
     用查询向量在 triple_index 中搜索，
     命中的三元组获得 FAISS 实际相似度分数，
-    未命中的三元组获得默认低分（0.5）
+    未命中的三元组获得默认低分（0.5）。
+
+    Args:
+        index_set (`FAISSIndexSet`): FAISS 索引集合
+        query_embed (`torch.Tensor`): 查询嵌入
+        triples (`List[Tuple]`): 候选三元组列表
+        top_k (`int`): 返回 top-k
+
+    Returns:
+        `List[Tuple[str, str, str, float]]`:
+            [(头ID, 关系, 尾ID, score), ...]
     """
     if not triples:
         return []
@@ -166,7 +227,18 @@ def _retrieve_via_communities(
     top_k: int,
     name_to_id: Dict[str, str] = None,
 ) -> List[str]:
-    """通过社区索引检索：搜索社区 → 展开成员节点"""
+    """通过社区索引检索：搜索社区 → 展开成员节点
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象（含社区超节点）
+        index_set (`FAISSIndexSet`): FAISS 索引集合
+        query_embed (`torch.Tensor`): 查询嵌入
+        top_k (`int`): 搜索社区数量
+        name_to_id (`Dict[str, str]`, optional): {实体名称: 节点ID}
+
+    Returns:
+        `List[str]`: 社区成员实体节点 ID 列表
+    """
     matched_communities = search_communities(
         index_set, query_embed.cpu().numpy(), top_k
     )
@@ -185,7 +257,13 @@ def _build_name_to_id(graph: nx.MultiDiGraph) -> Dict[str, str]:
     """从图中构建 节点名称 → 节点ID 的映射（用于社区成员查找）
 
     使用 properties.name 而非 get_node_text（后者包含 description），
-    确保多词实体名（如"Harry Potter"）能完整匹配
+    确保多词实体名（如 "Harry Potter"）能完整匹配。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象
+
+    Returns:
+        `Dict[str, str]`: {实体名称: 节点ID}
     """
     mapping = {}
     for node_id in graph.nodes():
@@ -207,7 +285,21 @@ def retrieve_path2(
     """Path2 检索入口
 
     并行执行三元组检索和社区检索，
-    合并节点后统一评分，返回 scored_triples 供上层合并使用
+    合并节点后统一评分，返回 scored_triples 供上层合并使用。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象
+        index_set (`FAISSIndexSet`): FAISS 索引集合
+        query_embed (`torch.Tensor`): 查询嵌入
+        top_k (`int`): top-k
+        name_to_id (`Dict[str, str]`, optional): 预计算的名称→ID 映射
+
+    Returns:
+        `Dict`:
+            - "triple_nodes": List[str] — 三元组路径中的节点
+            - "comm_nodes": List[str] — 社区展开的节点
+            - "scores": Dict[str, float] — {节点ID: 分数}
+            - "scored_triples": List[Tuple] — [(h, r, t, score), ...]
     """
     hop_cache = {}
     scored_triples = _retrieve_via_triples(
@@ -242,5 +334,15 @@ def _score_nodes_fallback(
     query_embed: torch.Tensor,
     nodes: List[str],
 ) -> Dict[str, float]:
-    """节点评分 fallback（后续可替换为编码器评分）"""
+    """节点评分 fallback
+
+    当前返回常数 0.5，后续可替换为编码器实际评分。
+
+    Args:
+        query_embed (`torch.Tensor`): 查询嵌入（当前未使用）
+        nodes (`List[str]`): 待评分节点
+
+    Returns:
+        `Dict[str, float]`: {节点ID: 0.5}
+    """
     return {node: 0.5 for node in nodes}
