@@ -109,6 +109,10 @@ async def construct_file_graph_service(file_id: str, client_id: str, db: AsyncSe
 
     await send_progress_update(client_id, "construction", 85, "保存图谱数据...")
     chunks_data = dict(getattr(builder, "all_chunks", {})) or None
+    if chunks_data:
+        logger.info(f"File {file_id} construction: {len(chunks_data)} chunks to save")
+    else:
+        logger.warning(f"File {file_id} construction: all_chunks is empty, chunks_data will be None")
     graph_data = builder.format_output() if hasattr(builder, "format_output") else None
 
     from app.base_model import generate_nanoid
@@ -324,12 +328,17 @@ async def ask_file_question_stream(
     chunks_data = None
     if db and graph_record and hasattr(graph_record, "chunks_data"):
         chunks_data = graph_record.chunks_data
+    if chunks_data:
+        logger.info(f"ask_file_question_stream: loaded {len(chunks_data)} chunks from DB for file {file_id}")
+    else:
+        logger.warning(f"ask_file_question_stream: graph_record.chunks_data is None/empty for file {file_id}")
     state = init_retrieval_state(
         dataset_name,
         cfg,
         graph_data=graph_data_source,
         chunks_data=chunks_data,
-        top_k=cfg.retrieval.top_k_filter,
+        top_k_triple=cfg.retrieval.top_k_filter,
+        top_k_chunk=cfg.retrieval.top_k_chunk,
         recall_paths=cfg.retrieval.recall_paths,
     )
 
@@ -364,7 +373,6 @@ async def ask_file_question_stream(
         retrieval_results, elapsed = process_retrieval_results(
             state,
             sq_text,
-            top_k=cfg.retrieval.top_k_filter,
             involved_types=involved_types,
         )
         triples = retrieval_results.get("triples", []) or []
@@ -426,7 +434,7 @@ async def ask_file_question_stream(
     init_prompt = build_prompt(
         cfg, dataset_name, question, sub_questions, context_initial
     )
-
+    # --------------- not IRCoT path ---------------------
     if not cfg.retrieval.agent.enable_ircot:
         yield _sse(type="answer_start")
         answer_tokens = []
@@ -454,7 +462,7 @@ async def ask_file_question_stream(
             "triples_count": len(initial_triples),
             "chunks_count": len(initial_chunk_ids),
             "processing_time": 0,
-            "chunk_contents": initial_chunk_contents[:3],
+            "chunk_contents": initial_chunk_contents,
             "thought": "".join(answer_tokens),
         }
         reasoning_steps.append(think)
@@ -480,7 +488,7 @@ async def ask_file_question_stream(
         yield _sse(type="done", answer="".join(answer_tokens))
         return
 
-    # IRCoT path
+    # --------------- IRCoT path ---------------------
     yield _sse(type="reasoning_start", step=0)
     initial_answer_tokens = []
     try:
@@ -616,7 +624,7 @@ async def ask_file_question_stream(
         )
         try:
             new_ret, _ = process_retrieval_results(
-                state, current_query, top_k=cfg.retrieval.top_k_filter
+                state, current_query
             )
             new_triples = new_ret.get("triples", []) or []
             new_chunk_ids = new_ret.get("chunk_ids", []) or []

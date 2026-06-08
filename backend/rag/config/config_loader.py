@@ -91,7 +91,8 @@ class AgentConfig:
 
 @dataclass
 class RetrievalConfig:
-    top_k: int = 5
+    top_k_triple: int = 5
+    top_k_chunk: int = 5
     recall_paths: int = 2
     top_k_filter: int = 20
     similarity_threshold: float = 0.3
@@ -99,6 +100,7 @@ class RetrievalConfig:
     enable_reranking: bool = True
     enable_high_recall: bool = True
     enable_caching: bool = True
+    triple_weight: float = 0.3
     cache_dir: str = str(file_path / "retriever/faiss_cache_new")
     faiss: FAISSConfig = None
     agent: AgentConfig = None

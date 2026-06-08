@@ -3,7 +3,7 @@
 功能：
 - 构建 chunk 嵌入 + FAISS 索引
 - 按查询相似度检索 chunk
-- 检索结果重排序（FAISS 分数 + 余弦相似度加权平均）
+- 检索结果重排序（FAISS 分数 + 余弦相似度加权平均，关联三元组相似度从 FAISS index 重建）
 - 持久化/加载（独立于图签名的 chunk 签名校验）
 
 数据流：
@@ -11,8 +11,10 @@
   build_chunk_index(encoder, chunk2id, cache_dir, dataset) → cache, index, id_map
   search_chunks(index, query_embed, chunk2id, id_map, top_k)
     → {"chunk_ids": [...], "scores": [...], "chunk_contents": [...]}
-  rerank_chunks(encoder, results, query_embed, top_k, chunk_embedding_cache)
+   rerank_chunks(results, query_embed, top_k, triple_index, chunk_to_triple_positions, triple_weight)
     → {"chunk_ids": [...], "scores": [...], "chunk_contents": [...]}
+
+   三元组相似度使用 FAISS triple_index.reconstruct() 读取预计算嵌入，无需重新编码。
 
 Chunk 签名机制（独立于图签名）：
   基于 chunk_id 集合的 MD5，仅 chunk 变更时重建，图变更不影响 chunk 缓存。
@@ -27,7 +29,7 @@ import hashlib
 import json
 import os
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import faiss
 import torch
@@ -181,6 +183,10 @@ def search_chunks(
     query_np = query_embed.cpu().numpy().reshape(1, -1).astype("float32")
     search_k = min(top_k * 2, len(index_to_chunk_id))
     if search_k <= 0:
+        logger.warning(
+            f"Chunk FAISS index is empty or zero-length "
+            f"(top_k={top_k}, index_to_chunk_id size={len(index_to_chunk_id)})"
+        )
         return {"chunk_ids": [], "scores": [], "chunk_contents": []}
     D, indices = chunk_index.search(query_np, search_k)
     chunk_ids = []
@@ -196,25 +202,27 @@ def search_chunks(
 
 
 def rerank_chunks(
-    encoder,
     chunk_results: Dict,
     query_embed: torch.Tensor,
     top_k: int,
-    chunk_embedding_cache: Dict[str, torch.Tensor] = None,
+    triple_index=None,
+    chunk_to_triple_positions: Dict[str, List[int]] = None,
+    triple_weight: float = 0.3,
 ) -> Dict:
     """对 chunk 检索结果重排序
 
-    策略：(FAISS 语义分 + 重编码余弦相似度) / 2
-
-    优先使用 chunk_embedding_cache 中的预计算嵌入，避免重复编码。
+    最终分数 = (1 - triple_weight) * 文本相似度 + triple_weight * 关联三元组最大相似度。
+    三元组相似度从 FAISS triple_index 中通过 reconstruct 取出预计算嵌入，避免重新编码。
 
     Args:
-        encoder: SentenceTransformer 编码器
         chunk_results (`Dict`): search_chunks 的返回结果
         query_embed (`torch.Tensor`): 查询嵌入向量
         top_k (`int`): 最终返回数量
-        chunk_embedding_cache (`Dict[str, torch.Tensor]`, optional):
-            {chunk_id: 预计算嵌入向量}，由 build_chunk_index 构建。
+        triple_index (`faiss.Index`, optional):
+            FAISS 三元组索引，传入后启用 triple 加权。
+        chunk_to_triple_positions (`Dict[str, List[int]]`, optional):
+            {chunk_id: [FAISS triple 位置]}。
+        triple_weight (`float`): 三元组相似度权重，默认 0.3。
 
     Returns:
         `Dict`:
@@ -226,46 +234,30 @@ def rerank_chunks(
     scores = chunk_results.get("scores", [])
     chunk_contents = chunk_results.get("chunk_contents", [])
     if not chunk_ids:
+        logger.info("rerank_chunks called with empty chunk_ids, returning empty")
         return {"chunk_ids": [], "scores": [], "chunk_contents": []}
+    logger.info(f"rerank_chunks: re-ranking {len(chunk_ids)} chunks (triple_weight={triple_weight})")
+
     reranked = []
     for cid, faiss_score, content in zip(chunk_ids, scores, chunk_contents):
         try:
-            if chunk_embedding_cache and cid in chunk_embedding_cache:
-                chunk_embed = chunk_embedding_cache[cid].float().to(query_embed.device)
-            else:
-                chunk_embed = (
-                    torch.tensor(encoder.encode(content)).float().to(query_embed.device)
-                )
-            sim = F.cosine_similarity(
-                query_embed.unsqueeze(0), chunk_embed.unsqueeze(0), dim=1
-            ).item()
-            sim = max(0.0, sim)
-            combined = (faiss_score + sim) / 2
+            triple_max_sim = 0.0
+            if triple_index is not None and chunk_to_triple_positions:
+                positions = chunk_to_triple_positions.get(cid, [])
+                if positions:
+                    vecs = []
+                    for pos in positions:
+                        raw = triple_index.reconstruct(int(pos)).astype("float32")
+                        vecs.append(torch.from_numpy(raw).to(query_embed.device))
+                    if vecs:
+                        triple_embeds = torch.stack(vecs)
+                        triple_sims = F.cosine_similarity(
+                            query_embed.unsqueeze(0), triple_embeds, dim=1
+                        )
+                        triple_max_sim = max(0.0, triple_sims.max().item())
 
-            # tag_score = 0.0
-
-            #     tag_text_parts = []
-            #     mt = t.get("macro_tags", {})
-            #     if mt.get("intent"):
-            #         tag_text_parts.append(mt["intent"])
-            #     if mt.get("topic"):
-            #         tag_text_parts.append(mt["topic"])
-            #     if mt.get("function"):
-            #         tag_text_parts.append(mt["function"])
-            #     tag_text_parts.extend(t.get("entities", []))
-            #     tag_text = " ".join(tag_text_parts)
-            #     if tag_text.strip():
-            #         tag_embed = (
-            #             torch.tensor(encoder.encode(tag_text))
-            #             .float()
-            #             .to(query_embed.device)
-            #         )
-            #         tag_score = F.cosine_similarity(
-            #             query_embed.unsqueeze(0), tag_embed.unsqueeze(0), dim=1
-            #         ).item()
-            #         tag_score = max(0.0, tag_score)
-
-            final_score = combined
+            text_sim = max(0.0, faiss_score)
+            final_score = (1 - triple_weight) * text_sim + triple_weight * triple_max_sim
             reranked.append((cid, final_score, content))
         except Exception as e:
             logger.warning(f"rerank_chunks error for {cid}: {e}")

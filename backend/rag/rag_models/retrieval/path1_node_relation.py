@@ -136,7 +136,7 @@ def retrieve_path1(
         future_faiss_relations = executor.submit(
             search_relations, index_set, query_embed.cpu().numpy(), top_k
         )
-        future_chunk_retrieval = executor.submit(chunk_retrieval_fn, query_embed, top_k)
+        future_chunk_retrieval = executor.submit(chunk_retrieval_fn, query_embed)
 
         faiss_candidate_nodes = future_faiss_nodes.result()
 

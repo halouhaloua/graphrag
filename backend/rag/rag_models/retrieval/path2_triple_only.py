@@ -29,6 +29,33 @@ from rag.rag_models.retrieval.faiss_index import FAISSIndexSet, search_communiti
 from rag.rag_models.retrieval.community_utils import get_community_nodes
 
 
+def _filter_community_triples(
+    graph: nx.MultiDiGraph,
+    triples: list,
+) -> list:
+    """过滤掉头或尾节点 label 包含 'community' 的三元组。
+
+    社区节点是 FastTreeComm 聚类生成的虚拟超节点，
+    其关联的三元组无实际语义信息，也无法反向回溯到 chunk。
+
+    Args:
+        graph (`nx.MultiDiGraph`): 图对象
+        triples (`list`):
+            [(头ID, 关系, 尾ID), ...] 或 [(头ID, 关系, 尾ID, score), ...]
+
+    Returns:
+        `list`: 过滤后的三元组列表
+    """
+    result = []
+    for triple in triples:
+        h, t = triple[0], triple[2]
+        h_label = graph.nodes.get(h, {}).get("label", "") if h in graph.nodes else ""
+        t_label = graph.nodes.get(t, {}).get("label", "") if t in graph.nodes else ""
+        if "community" not in h_label and "community" not in t_label:
+            result.append(triple)
+    return result
+
+
 def _deduplicate_triples(triples: List[Tuple]) -> List[Tuple]:
     """三元组去重（保留首次出现顺序）
 
@@ -144,6 +171,7 @@ def _retrieve_via_triples(
         all_triples.extend(_collect_neighbor_triples(graph, h, hop_cache))
         all_triples.extend(_collect_neighbor_triples(graph, t, hop_cache))
     unique_triples = _deduplicate_triples(all_triples)
+    unique_triples = _filter_community_triples(graph, unique_triples)
     scored = _score_triples_via_faiss(index_set, query_embed, unique_triples, top_k)
     return scored
 

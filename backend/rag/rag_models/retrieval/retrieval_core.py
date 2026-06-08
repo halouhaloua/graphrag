@@ -13,7 +13,7 @@
     → RetrievalState  # 包含图、编码器、LLM 客户端、配置、缓存目录
   build_retrieval_indices(state)
     → state.faiss, node_text_cache, node_text_index, chunk_index  # 惰性加载
-  process_retrieval_results(state, question, top_k, involved_types)
+  process_retrieval_results(state, question, involved_types)
     → {
         "triples": [str, ...],           # format_scored_triples 结果（已合并）
         "chunk_ids": [str, ...],         # 所有关联的 chunk_id 集合
@@ -90,7 +90,8 @@ class RetrievalState:
         chunk2id (`Dict[str, str]`): {chunk_id: chunk_text}
         config: 全局配置对象
         dataset (`str`): 数据集名称
-        top_k (`int`): 检索 top-k 数量
+        top_k_triple (`int`): 三元组检索 top-k 数量
+        top_k_chunk (`int`): 直接 chunk 语义召回 top-k 数量
         recall_paths (`int`): 检索路径数（1=仅Path1, 2=Path1+Path2）
         cache_dir (`str`): 缓存根目录
         node_text_cache (`Dict[str, str]`): 惰性加载的节点文本缓存
@@ -99,6 +100,7 @@ class RetrievalState:
         chunk_faiss_index: chunk FAISS 索引
         chunk_id_to_index (`Dict[int, str]`): {FAISS位置: chunk_id}
         chunk_embeddings_precomputed (`bool`): chunk 索引是否已构建
+        chunk_to_triple_positions (`Dict[str, List[int]]`): {chunk_id: [FAISS triple 位置]}
         indices_built (`bool`): 所有检索索引是否已加载
     """
 
@@ -110,7 +112,8 @@ class RetrievalState:
     chunk2id: Dict[str, str] = field(default_factory=dict)
     config: Any = None
     dataset: str = ""
-    top_k: int = 5
+    top_k_triple: int = 5
+    top_k_chunk: int = 5
     recall_paths: int = 2
     cache_dir: str = "retriever/faiss_cache_new"
     # 惰性缓存（在 build_retrieval_indices 中初始化）
@@ -120,6 +123,7 @@ class RetrievalState:
     chunk_faiss_index: Any = None
     chunk_id_to_index: Dict[int, str] = field(default_factory=dict)
     chunk_embeddings_precomputed: bool = False
+    chunk_to_triple_positions: Dict[str, List[int]] = field(default_factory=dict)
     indices_built: bool = False
 
 
@@ -129,7 +133,8 @@ def init_retrieval_state(
     graph_data: Optional[list] = None,
     json_path: str = "",
     chunks_data: Optional[dict] = None,
-    top_k: int = 5,
+    top_k_triple: int = 5,
+    top_k_chunk: int = 5,
     recall_paths: int = 2,
 ) -> RetrievalState:
     """从图数据创建检索状态
@@ -147,7 +152,8 @@ def init_retrieval_state(
         chunks_data (`dict`, optional):
             {chunk_id: str | dict} chunk 数据。
             dict 格式：{"chunk": str, "entities": [...]}
-        top_k (`int`): 检索 top-k 数量
+        top_k_triple (`int`): 三元组检索 top-k 数量
+        top_k_chunk (`int`): 直接 chunk 语义召回 top-k 数量
         recall_paths (`int`): 检索路径数（1 或 2）
 
     Returns:
@@ -174,6 +180,24 @@ def init_retrieval_state(
                 chunk2id[cid] = entry
             else:
                 chunk2id[cid] = entry.get("chunk", "")
+    else:
+        # fallback: 从 graph_data 节点属性中扫描 "chunk id"，重建 chunk_id 列表
+        if graph_data:
+            chunk_id_set = set()
+            for rel in graph_data:
+                for side in ("start_node", "end_node"):
+                    props = rel.get(side, {}).get("properties", {})
+                    cid = props.get("chunk id")
+                    if cid:
+                        chunk_id_set.add(str(cid))
+            if chunk_id_set:
+                logger.warning(
+                    f"chunks_data is empty for dataset {dataset}, "
+                    f"reconstructed {len(chunk_id_set)} chunk IDs from graph_data node properties. "
+                    "Chunk content will be unavailable, only chunk IDs are recovered."
+                )
+                for cid in chunk_id_set:
+                    chunk2id[cid] = f"[chunk {cid}]"
 
     state = RetrievalState(
         graph=graph,
@@ -183,7 +207,8 @@ def init_retrieval_state(
         chunk2id=chunk2id,
         config=cfg,
         dataset=dataset,
-        top_k=top_k if top_k != 5 else cfg.retrieval.top_k,
+        top_k_triple=top_k_triple if top_k_triple != 5 else cfg.retrieval.top_k_triple,
+        top_k_chunk=top_k_chunk if top_k_chunk != 5 else cfg.retrieval.top_k_chunk,
         recall_paths=(
             recall_paths if recall_paths != 2 else cfg.retrieval.recall_paths
         ),
@@ -233,8 +258,30 @@ def build_retrieval_indices(state: RetrievalState):
             state.graph, state.node_text_cache, state.cache_dir, state.dataset
         )
 
+    # 建立 chunk_id → FAISS triple position 映射
+    if state.faiss and state.faiss.triple_map:
+        chunk_to_pos: Dict[str, List[int]] = {}
+        for pos, triple_data in state.faiss.triple_map.items():
+            h_id, r, t_id = triple_data[0], triple_data[1], triple_data[2]
+            h_data = state.graph.nodes.get(h_id)
+            if h_data:
+                h_cid = h_data.get("properties", {}).get("chunk id")
+                if h_cid:
+                    chunk_to_pos.setdefault(h_cid, []).append(pos)
+            t_data = state.graph.nodes.get(t_id)
+            if t_data:
+                t_cid = t_data.get("properties", {}).get("chunk id")
+                if t_cid:
+                    chunk_to_pos.setdefault(t_cid, []).append(pos)
+        state.chunk_to_triple_positions = chunk_to_pos
+        logger.debug(
+            f"Built chunk_to_triple_positions for {len(chunk_to_pos)} chunks "
+            f"(from {len(state.faiss.triple_map)} triples)"
+        )
+
     # Chunk 索引
     if state.chunk2id:
+        logger.info(f"Building chunk index: {len(state.chunk2id)} chunks for dataset {state.dataset}")
         cache, index, id_map = build_chunk_index(
             state.encoder,
             state.chunk2id,
@@ -246,6 +293,8 @@ def build_retrieval_indices(state: RetrievalState):
         state.chunk_faiss_index = index
         state.chunk_id_to_index = id_map
         state.chunk_embeddings_precomputed = True
+    else:
+        logger.warning(f"chunk2id is empty for dataset {state.dataset}, chunk retrieval will be skipped")
 
     state.indices_built = True
     logger.info(f"Retrieval indices built for dataset {state.dataset}")
@@ -276,21 +325,31 @@ def _chunk_retrieval_fn(state: RetrievalState):
 
     Returns:
         `Callable`:
-            接收 (query_embed, top_k) 的闭包，返回 chunk 检索结果 dict
+            接收 (query_embed) 的闭包，返回 chunk 检索结果 dict（chunk top-k 由 state.top_k_chunk 内部决定）
     """
 
-    def _fn(query_embed: torch.Tensor, top_k: int) -> Dict:
+    def _fn(query_embed: torch.Tensor) -> Dict:
         if not state.chunk_embeddings_precomputed:
+            logger.warning(
+                f"chunk_embeddings_precomputed=False for dataset {state.dataset}, "
+                f"chunk retrieval returning empty results (chunk2id size={len(state.chunk2id)})"
+            )
             return {"chunk_ids": [], "scores": [], "chunk_contents": []}
+        chunk_top_k = state.top_k_chunk
         results = search_chunks(
             state.chunk_faiss_index,
             query_embed,
             state.chunk2id,
             state.chunk_id_to_index,
-            top_k,
+            chunk_top_k,
         )
+        triple_weight = getattr(state.config, "retrieval", None)
+        triple_weight = getattr(triple_weight, "triple_weight", 0.3) if triple_weight else 0.3
         return rerank_chunks(
-            state.encoder, results, query_embed, top_k, state.chunk_embedding_cache
+            results, query_embed, chunk_top_k,
+            triple_index=state.faiss.triple_index if state.faiss else None,
+            chunk_to_triple_positions=state.chunk_to_triple_positions,
+            triple_weight=triple_weight,
         )
 
     return _fn
@@ -339,7 +398,7 @@ def retrieve(
             state.node_text_index,
             _chunk_retrieval_fn(state),
             state.config,
-            state.top_k,
+            state.top_k_triple,
         )
         chunk_ids = extract_chunk_ids_from_nodes(state.graph, path1["top_nodes"])
         if path1.get("chunk_results"):
@@ -382,7 +441,7 @@ def _parallel_dual_path(
             state.graph,
             state.faiss,
             question_embed,
-            state.top_k,
+            state.top_k_triple,
         )
 
     path2_thread = threading.Thread(target=_run_path2)
@@ -399,7 +458,7 @@ def _parallel_dual_path(
         state.node_text_index,
         _chunk_retrieval_fn(state),
         state.config,
-        state.top_k,
+        state.top_k_triple,
     )
 
     path2_thread.join()
@@ -458,22 +517,12 @@ def retrieve_with_type_filter(
     if state.recall_paths == 1:
         filtered_nodes = filter_nodes_by_schema_type(state.graph, target_node_types)
         if filtered_nodes:
-            node_results = similarity_search_on_filtered(
-                state.faiss, question_embed, filtered_nodes, state.top_k
-            )
-            triple_list = []
-            for n in node_results.get("top_nodes", []):
-                for _, v, d in state.graph.out_edges(n, data=True):
-                    triple_list.append((n, d.get("relation", ""), v))
-            chunk_ids = extract_chunk_ids_from_nodes(
-                state.graph, node_results.get("top_nodes", [])
+            hybrid = _hybrid_type_filtered(
+                state, question_embed, question, target_node_types
             )
             result = {
-                "path1_results": {
-                    "top_nodes": node_results["top_nodes"],
-                    "one_hop_triples": triple_list,
-                },
-                "chunk_ids": list(chunk_ids),
+                "path1_results": hybrid.get("path1_results", {}),
+                "chunk_ids": hybrid.get("chunk_ids", []),
             }
         else:
             _, result = retrieve(state, question)
@@ -483,7 +532,7 @@ def retrieve_with_type_filter(
             state, question_embed, question, target_node_types
         )
         path2_results = retrieve_path2(
-            state.graph, state.faiss, question_embed, state.top_k
+            state.graph, state.faiss, question_embed, state.top_k_triple
         )
         chunk_ids = hybrid.get("chunk_ids", [])
         path2_chunk_ids = extract_chunk_ids_from_triples(
@@ -504,7 +553,7 @@ def _hybrid_type_filtered(
     question,
     target_node_types,
 ):
-    """对 Path1 使用类型过滤，返回过滤后的节点和三元组
+    """对 Path1 使用类型过滤，返回过滤后的节点、三元组和 chunk 检索结果
 
     .. note::
         question 参数当前未使用，保留接口一致性。
@@ -517,14 +566,20 @@ def _hybrid_type_filtered(
 
     Returns:
         `Dict`:
-            - "path1_results": {"top_nodes": [...], "one_hop_triples": [...]}
+            - "path1_results": {
+                "top_nodes": [...],
+                "one_hop_triples": [...],
+                "chunk_results": {...}
+              }
             - "chunk_ids": List[str]
     """
     filtered_nodes = filter_nodes_by_schema_type(state.graph, target_node_types)
     path1_results = {}
+
+    # 1) 类型过滤节点检索
     if filtered_nodes:
         node_results = similarity_search_on_filtered(
-            state.faiss, question_embed, filtered_nodes, state.top_k
+            state.faiss, question_embed, filtered_nodes, state.top_k_triple
         )
         triple_list = []
         for n in node_results.get("top_nodes", []):
@@ -534,10 +589,23 @@ def _hybrid_type_filtered(
             "top_nodes": node_results["top_nodes"],
             "one_hop_triples": triple_list,
         }
-    chunk_ids = extract_chunk_ids_from_nodes(
+
+    # 2) chunk 直接语义检索
+    chunk_fn = _chunk_retrieval_fn(state)
+    chunk_results = chunk_fn(question_embed)
+    path1_results["chunk_results"] = chunk_results
+
+    # 3) 合并 chunk IDs（节点回溯 + 直接语义召回）
+    node_chunk_ids = extract_chunk_ids_from_nodes(
         state.graph, path1_results.get("top_nodes", [])
     )
-    return {"path1_results": path1_results, "chunk_ids": list(chunk_ids)}
+    direct_chunk_ids = set(chunk_results.get("chunk_ids", []))
+    all_chunk_ids = set(node_chunk_ids) | direct_chunk_ids
+
+    return {
+        "path1_results": path1_results,
+        "chunk_ids": list(all_chunk_ids),
+    }
 
 
 # ─── 完整处理流水线 ───
@@ -546,7 +614,6 @@ def _hybrid_type_filtered(
 def process_retrieval_results(
     state: RetrievalState,
     question: str,
-    top_k: int = 20,
     involved_types: dict = None,
 ) -> Tuple[Dict, float]:
     """完整的检索处理流水线
@@ -561,7 +628,6 @@ def process_retrieval_results(
     Args:
         state (`RetrievalState`): 检索状态
         question (`str`): 用户问题
-        top_k (`int`): 返回 top-k 三元组数量
         involved_types (`dict`, optional):
             {"nodes": [...], "relations": [...], "attributes": [...]}
 
@@ -591,7 +657,10 @@ def process_retrieval_results(
     if chunk_results:
         chunk_retrieval_results = chunk_results
         chunk_retrieval_ids = set(chunk_results.get("chunk_ids", []))
+        if not chunk_retrieval_ids:
+            logger.debug(f"chunk_retrieval returned empty chunk_ids for question: {question[:50]}")
     else:
+        logger.warning(f"chunk_results key missing in path1_results for question: {question[:50]}")
         chunk_retrieval_results = {
             "chunk_ids": [],
             "scores": [],
@@ -601,7 +670,7 @@ def process_retrieval_results(
 
     # 三元组评分与合并
     scored_triples = _collect_all_scored(state, results, question_embed)
-    limited_scored = scored_triples[:top_k]
+    limited_scored = scored_triples[:state.top_k_triple]
     formatted_triples = format_scored_triples(state.graph, limited_scored)
     triple_chunk_ids = extract_chunk_ids_from_triples(state.graph, limited_scored)
 
@@ -650,6 +719,6 @@ def _collect_all_scored(
         path2_scored,
         state.encoder,
         question_embed,
-        top_k=20,
+        top_k=state.top_k_triple,
         graph=state.graph,
     )
