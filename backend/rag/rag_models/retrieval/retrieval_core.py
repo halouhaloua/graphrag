@@ -267,7 +267,7 @@ def build_retrieval_indices(state: RetrievalState):
     if state.faiss and state.faiss.triple_map:
         chunk_to_pos: Dict[str, List[int]] = {}
         for pos, triple_data in state.faiss.triple_map.items():
-            h_id, r, t_id = triple_data[0], triple_data[1], triple_data[2]
+            h_id, _, t_id = triple_data[0], triple_data[1], triple_data[2]
             h_data = state.graph.nodes.get(h_id)
             if h_data:
                 h_cid = h_data.get("properties", {}).get("chunk id")
@@ -733,13 +733,54 @@ def process_retrieval_results(
         state.graph, limited_scored, chunk2id=state.chunk2id
     )
 
+    # 收集实体名→描述（用于 LLM 上下文的 === Entities ===）
+    entity_dict: Dict[str, str] = {}
+    triples_data = []
+    for h, r, t, _score in limited_scored:
+        h_name = h_desc = t_name = t_desc = ""
+        h_nd = state.graph.nodes.get(h)
+        if h_nd and h_nd.get("label") == "entity":
+            hp = h_nd.get("properties", {})
+            h_name = hp.get("name", "")
+            h_desc = hp.get("description", "") or ""
+        t_nd = state.graph.nodes.get(t)
+        if t_nd and t_nd.get("label") == "entity":
+            tp = t_nd.get("properties", {})
+            t_name = tp.get("name", "")
+            t_desc = tp.get("description", "") or ""
+
+        # 收集 entity_dict
+        for ename, edesc in [(h_name, h_desc), (t_name, t_desc)]:
+            if ename and ename not in entity_dict:
+                entity_dict[ename] = edesc
+
+        # 收集结构化三元组数据
+        if h_name and t_name and r:
+            r_desc = ""
+            edge_data = state.graph.get_edge_data(h, t)
+            if edge_data:
+                for attrs in edge_data.values():
+                    if attrs.get("relation") == r:
+                        r_desc = attrs.get("description", "") or ""
+                        break
+            triples_data.append({
+                "head": {"name": h_name, "description": h_desc},
+                "relation": r,
+                "relation_description": r_desc,
+                "tail": {"name": t_name, "description": t_desc},
+            })
+
     retrieval_results = {
         "triples": formatted_triples,
+        "triples_data": triples_data,
         "chunk_ids": list(all_chunk_ids),
         "chunk_contents": matching_chunks,
         "chunk_retrieval_results": chunk_retrieval_results,
         "community_summaries": community_summaries,
+        "entities": entity_dict,
     }
+
+
     return retrieval_results, retrieval_time
 
 

@@ -219,6 +219,7 @@ def prepare_subquery_visualization(
 
 
 def prepare_retrieved_graph_visualization(triples: List[str]) -> Dict:
+    """从格式化三元组字符串构建图可视化数据（兼容旧版）"""
     nodes = {}
     links = []
     for triple in triples:
@@ -244,6 +245,38 @@ def prepare_retrieved_graph_visualization(triples: List[str]) -> Dict:
                     "symbolSize": 15,
                 }
             links.append({"source": h, "target": t, "name": r[:15], "value": 1})
+    return {
+        "nodes": list(nodes.values()),
+        "links": links,
+        "categories": [{"name": "entity"}],
+        "stats": {"total_nodes": len(nodes), "total_edges": len(links)},
+    }
+
+
+def prepare_retrieved_graph_visualization_from_data(triples_data: List[Dict]) -> Dict:
+    """从结构化三元组数据构建图可视化数据
+
+    Args:
+        triples_data (`List[Dict]`):
+            每项含 {"head": {"name":..., "description":...}, "relation":...,
+                    "tail": {"name":..., "description":...}}
+    """
+    nodes = {}
+    links = []
+    for td in triples_data:
+        h_name = td.get("head", {}).get("name", "")
+        t_name = td.get("tail", {}).get("name", "")
+        rel = td.get("relation", "")
+        if h_name and t_name and rel:
+            for name in (h_name, t_name):
+                if name not in nodes:
+                    nodes[name] = {
+                        "id": name,
+                        "name": name[:20],
+                        "category": "entity",
+                        "symbolSize": 15,
+                    }
+            links.append({"source": h_name, "target": t_name, "name": rel[:15], "value": 1})
     return {
         "nodes": list(nodes.values()),
         "links": links,
@@ -362,10 +395,13 @@ async def ask_file_question_stream(
         involved_types = {"nodes": [], "relations": [], "attributes": []}
 
     reasoning_steps = []
-    all_triples = set()
+    all_triples: list = []
+    all_triples_set: set = set()
     all_chunk_ids = set()
     all_chunk_contents: Dict[str, str] = {}
     all_community_summaries: Dict[str, dict] = {}
+    all_entity_descriptions: Dict[str, str] = {}
+    all_triples_data: list = []
 
     yield _sse(type="status", progress=65, message="初始检索...")
     for i, sq in enumerate(sub_questions):
@@ -390,12 +426,17 @@ async def ask_file_question_stream(
             for i_c, cid in enumerate(chunk_ids):
                 if i_c < len(chunk_contents):
                     all_chunk_contents[cid] = chunk_contents[i_c]
-        all_triples.update(triples)
+        for t in triples:
+            if t not in all_triples_set:
+                all_triples_set.add(t)
+                all_triples.append(t)
         all_chunk_ids.update(chunk_ids)
         for cs in retrieval_results.get("community_summaries", []):
             cs_name = cs.get("name", "")
             if cs_name:
                 all_community_summaries[cs_name] = cs
+        all_entity_descriptions.update(retrieval_results.get("entities", {}))
+        all_triples_data.extend(retrieval_results.get("triples_data", []))
         reasoning_steps.append(
             {
                 "type": "sub_question",
@@ -408,10 +449,12 @@ async def ask_file_question_stream(
             }
         )
 
+    display_triples = [t for t in all_triples if "has_attribute" not in t][:20]
     yield _sse(
         type="metadata",
         sub_questions=sub_questions,
-        triples=list(all_triples)[:20],
+        triples=display_triples,
+        triples_data=all_triples_data[:20],
         chunks=list(all_chunk_contents.values())[:10],
     )
 
@@ -423,9 +466,22 @@ async def ask_file_question_stream(
     community_str_parts = []
     for cs_data in list(all_community_summaries.values())[:5]:
         parts = [f"【{cs_data.get('name', '')}】{cs_data.get('description', '')}"]
-        for km in cs_data.get("key_members", [])[:5]:
-            parts.append(f"  - {km['name']}: {km['description']}")
+        sig = cs_data.get('significance', '')
+        if sig:
+            parts.append(f"  定位: {sig}")
+        for ev in cs_data.get('key_events', [])[:3]:
+            parts.append(f"  ▶ {ev}")
+        phases = cs_data.get('timeline_phases', '')
+        if phases:
+            parts.append(f"  时间线: {phases}")
         community_str_parts.append("\n".join(parts))
+
+    # 构建 Entities section
+    entity_lines = []
+    for ename in sorted(all_entity_descriptions):
+        edesc = all_entity_descriptions.get(ename, "")
+        entity_lines.append(f"  {ename}: {edesc}" if edesc else f"  {ename}")
+
     context_initial = (
         (
             "=== Community Summaries ===\n"
@@ -434,6 +490,7 @@ async def ask_file_question_stream(
             if community_str_parts
             else ""
         )
+        + ("=== Entities ===\n" + "\n".join(entity_lines[:20]) + "\n" if entity_lines else "")
         + "=== Triples ===\n"
         + "\n".join(initial_triples[:20])
         + "\n=== Chunks ===\n"
@@ -442,6 +499,7 @@ async def ask_file_question_stream(
     init_prompt = build_prompt(
         cfg, dataset_name, question, sub_questions, context_initial
     )
+
     # --------------- not IRCoT path ---------------------
     if not cfg.retrieval.agent.enable_ircot:
         yield _sse(type="answer_start")
@@ -462,12 +520,14 @@ async def ask_file_question_stream(
             answer_tokens.append(err)
             yield _sse(type="token", phase="answer", text=err)
         yield _sse(type="answer_end")
-        final_triples = initial_triples[:20]
+        display_triples = [t for t in initial_triples if "has_attribute" not in t]
+        final_triples = display_triples[:20]
         think = {
             "type": "init",
             "question": question,
-            "triples": initial_triples,
-            "triples_count": len(initial_triples),
+            "triples": display_triples,
+            "triples_data": all_triples_data[:20],
+            "triples_count": len(display_triples),
             "chunks_count": len(initial_chunk_ids),
             "processing_time": 0,
             "chunk_contents": initial_chunk_contents,
@@ -478,7 +538,7 @@ async def ask_file_question_stream(
             "subqueries": prepare_subquery_visualization(
                 sub_questions, reasoning_steps
             ),
-            "knowledge_graph": prepare_retrieved_graph_visualization(final_triples),
+            "knowledge_graph": prepare_retrieved_graph_visualization_from_data(all_triples_data[:20]),
             "reasoning_flow": prepare_reasoning_flow_visualization(reasoning_steps),
             "retrieval_details": {
                 "total_triples": len(final_triples),
@@ -508,12 +568,13 @@ async def ask_file_question_stream(
         initial_answer_tokens.append(err)
         yield _sse(type="token", phase="reasoning", text=err)
     initial_answer = "".join(initial_answer_tokens)
+    ircot_display_triples = [t for t in initial_triples if "has_attribute" not in t]
     reasoning_steps.append(
         {
             "type": "init",
             "question": question,
-            "triples": initial_triples,
-            "triples_count": len(initial_triples),
+            "triples": ircot_display_triples,
+            "triples_count": len(ircot_display_triples),
             "chunks_count": len(initial_chunk_ids),
             "processing_time": 0,
             "chunk_contents": initial_chunk_contents[:3],
@@ -549,9 +610,21 @@ async def ask_file_question_stream(
         loop_community_parts = []
         for cs_data in list(all_community_summaries.values())[:5]:
             parts = [f"【{cs_data.get('name', '')}】{cs_data.get('description', '')}"]
-            for km in cs_data.get("key_members", [])[:5]:
-                parts.append(f"  - {km['name']}: {km['description']}")
+            sig = cs_data.get('significance', '')
+            if sig:
+                parts.append(f"  定位: {sig}")
+            for ev in cs_data.get('key_events', [])[:3]:
+                parts.append(f"  ▶ {ev}")
+            phases = cs_data.get('timeline_phases', '')
+            if phases:
+                parts.append(f"  时间线: {phases}")
             loop_community_parts.append("\n".join(parts))
+
+        loop_entity_lines = []
+        for ename in sorted(all_entity_descriptions):
+            edesc = all_entity_descriptions.get(ename, "")
+            loop_entity_lines.append(f"  {ename}: {edesc}" if edesc else f"  {ename}")
+
         loop_ctx = (
             (
                 "=== Community Summaries ===\n"
@@ -560,6 +633,9 @@ async def ask_file_question_stream(
                 if loop_community_parts
                 else ""
             )
+            + ("=== Entities ===\n"
+            + "\n".join(loop_entity_lines[:20]) 
+            + "\n" if loop_entity_lines else "")
             + "=== Triples ===\n"
             + "\n".join(loop_triples[:20])
             + "\n=== Chunks ===\n"
@@ -647,12 +723,17 @@ async def ask_file_question_stream(
                 for i_c, cid in enumerate(new_chunk_ids):
                     if i_c < len(new_cc):
                         all_chunk_contents[cid] = new_cc[i_c]
-            all_triples.update(new_triples)
+            for t in new_triples:
+                if t not in all_triples_set:
+                    all_triples_set.add(t)
+                    all_triples.append(t)
+            all_triples_data.extend(new_ret.get("triples_data", []))
             all_chunk_ids.update(new_chunk_ids)
             for cs in new_ret.get("community_summaries", []):
                 cs_name = cs.get("name", "")
                 if cs_name:
                     all_community_summaries[cs_name] = cs
+            all_entity_descriptions.update(new_ret.get("entities", {}))
         except Exception as e:
             logger.error(f"Iterative retrieval failed: {e}")
             break
@@ -660,14 +741,15 @@ async def ask_file_question_stream(
     yield _sse(type="ircot_end")
     if final_answer is None:
         final_answer = initial_answer
-    final_triples = _dedup(list(all_triples))[:20]
+    display_triples_ircot = [t for t in _dedup(list(all_triples)) if "has_attribute" not in t]
+    final_triples = display_triples_ircot[:20]
     final_chunk_ids = list(set(all_chunk_ids))
     final_chunk_contents = _merge_chunk_contents(final_chunk_ids, all_chunk_contents)[
         :10
     ]
     visualization_data = {
         "subqueries": prepare_subquery_visualization(sub_questions, reasoning_steps),
-        "knowledge_graph": prepare_retrieved_graph_visualization(final_triples),
+        "knowledge_graph": prepare_retrieved_graph_visualization_from_data(all_triples_data[:20]),
         "reasoning_flow": prepare_reasoning_flow_visualization(reasoning_steps),
         "retrieval_details": {
             "total_triples": len(final_triples),

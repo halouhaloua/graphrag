@@ -73,11 +73,12 @@ class TestFormatScoredTriples:
         # 空文本会被 is_valid_node_text 过滤掉
         assert len(result) == 0
 
-    def test_score_formatting(self):
-        """分数应格式化为三位小数"""
+    def test_score_removed(self):
+        """score 后缀已被移除，不应出现在格式化结果中"""
         scored = [("e0", "based on", "e1", 0.95555)]
         result = format_scored_triples(self.g, scored)
-        assert "0.956" in result[0]
+        assert "0.956" not in result[0]
+        assert "[score:" not in result[0]
 
     def test_tail_grouping_with_desc(self):
         """多个 tail 合并后，取首条 tail 的描述追加"""

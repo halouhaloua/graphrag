@@ -65,8 +65,8 @@ class ConstructionConfig:
     mode: str = "agent"
     max_workers: int = 5
     datasets_no_chunk: list = field(default_factory=list)
-    chunk_size: int = 512
-    overlap: int = 100
+    chunk_size: int = 1000
+    overlap: int = 200
     encoding_name: str = "cl100k_base"
 
 
@@ -103,8 +103,8 @@ class RetrievalTypeScale:
 
 @dataclass
 class RetrievalConfig:
-    top_k_triple: int = 5
-    top_k_chunk: int = 5
+    top_k_triple: int = 8
+    top_k_chunk: int = 3
     recall_paths: int = 2
     top_k_filter: int = 20
     similarity_threshold: float = 0.3

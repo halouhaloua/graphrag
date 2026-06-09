@@ -311,10 +311,10 @@ def format_scored_triples(
     graph,
     scored_triples: List[Tuple[str, str, str, float]],
 ) -> List[str]:
-    """将带分数的三元组格式化为可读字符串，用于 LLM 上下文
+    """将三元组格式化为可读字符串，用于 LLM 上下文
 
     按 (h, r) 分组合并 tail 文本，减少重复头实体和关系。
-    格式: "(头文本, 关系, tail1、tail2) [score: X.XXX]"
+    格式: "(头文本, 关系, tail1、tail2)"，有 description 时追加 "\n  → {description}"
 
     Args:
         graph: NetworkX MultiDiGraph
@@ -324,8 +324,8 @@ def format_scored_triples(
     Returns:
         `List[str]`:
             [
-                "(江兰兰, 隶属于, 江西师范大学、江西师范大学马克思主义理论博士后科研流动站) [score: 0.517]",
-                "(江兰兰, has_attribute, 类型: 人物) [score: 0.558]",
+                "(江兰兰, 隶属于, 江西师范大学、江西师范大学马克思主义理论博士后科研流动站)",
+                "  → description text",
                 ...
             ]
     """
@@ -366,12 +366,11 @@ def format_scored_triples(
     for (h, r), tails in groups.items():
         head_text = head_text_cache.get(h, get_node_text(graph, h))
         tail_list = list(tails.keys())
-        best_score = max(v[0] for v in tails.values())
         if len(tail_list) == 1:
-            triple_text = f"({head_text}, {r}, {tail_list[0]}) [score: {best_score:.3f}]"
+            triple_text = f"({head_text}, {r}, {tail_list[0]})"
         else:
             tails_joined = "、".join(tail_list)
-            triple_text = f"({head_text}, {r}, {tails_joined}) [score: {best_score:.3f}]"
+            triple_text = f"({head_text}, {r}, {tails_joined})"
         # 取第一个 tail 的原始节点 ID 查 description
         first_tail_id = tails[tail_list[0]][1]
         desc = _get_desc(h, r, first_tail_id)

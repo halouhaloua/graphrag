@@ -106,6 +106,9 @@ def collect_community_summaries(
                     "description": "社区摘要",
                     "members": ["实体名1", ...],
                     "keywords": ["关键词1", ...],
+                    "key_events": ["事件1", "事件2", ...],
+                    "timeline_phases": "时间阶段描述",
+                    "significance": "社区定位与贡献",
                     "key_members": [
                         {"name": "...", "description": "...", "chunk_excerpt": "..."},
                         ...
@@ -155,6 +158,9 @@ def collect_community_summaries(
                             "description": description,
                             "members": members,
                             "keywords": keywords,
+                            "key_events": props.get("key_events", []),
+                            "timeline_phases": props.get("timeline_phases", ""),
+                            "significance": props.get("significance", ""),
                             "key_members": key_members,
                         }
     return list(community_set.values())

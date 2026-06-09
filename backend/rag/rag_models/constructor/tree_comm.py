@@ -375,7 +375,7 @@ class FastTreeComm:
             return community_nodes[0]
         return self.extract_keywords_from_community(community_nodes)[0]
 
-    def _get_community_chunk_texts(self, members, max_chunks=3, max_chars=500):
+    def _get_community_chunk_texts(self, members, max_chunks=5, max_chars=2500):
         raw_texts = []
         for node in members:
             node_data = self.graph.nodes.get(node, {})
@@ -409,24 +409,55 @@ class FastTreeComm:
             }
             batch_data.append(comm_info)
 
-        prompt = f"""Generate names and summaries for the following {len(batch_data)} communities.
-        Communities data: {json.dumps(batch_data, ensure_ascii=False)}
-        
-        For each community, follow these guidelines:
-        1. **Naming Rules**:
-           - Reflect geographic, cultural, or member traits
-           - Avoid special characters; use hyphens if needed
-        
-        2. **Summary Requirements**:
-           - Less than 100 words, same language as center node
-           - Highlight key attributes, using the source_text for factual grounding
-        
-        3. **Output Format** - return a JSON array:
-        [
-            {{"id": "community_id", "name": "community_name", "summary": "10-word summary"}},
-            ...
-        ]
-        """
+        prompt = f"""Generate community summaries in Chinese. They must support answering macro-level and entity-centric factual questions (e.g., "What are the important experiences of Li Kui?").
+
+Communities data: {json.dumps(batch_data, ensure_ascii=False)}
+
+**Important**: Entity-level descriptions (person/organization attributes) and key relations have already been extracted during graph construction. Do NOT repeat them in community summaries. Instead, focus on community-level information: event sequences, causal chains, temporal phases, and thematic evolution.
+
+For each community, output the following fields:
+
+- `id`: community id (from input)
+- `name`: short thematic name in Chinese (2-8 words)
+- `summary`: macro-level overview (under 120 words) covering:
+    - The community's main narrative or functional role within the data
+    - Key event chains or causal relationships among entities (high-level, not detailed relation extraction)
+    - Temporal trends or stage divisions if evident
+    - Do NOT list entity descriptions or relations; you may mention entity names only as participants in events.
+- `key_events`: array of 2-5 strings. Each string describes a concrete event using the format: "Who did what, when (if known), where (if known), outcome". Prioritize events that involve multiple entities or represent turning points.
+- `timeline_phases`: string describing major chronological stages. If no temporal information is evident, return an empty string "".
+- `significance`: one sentence explaining this community's main function or contribution, based only on the given data (e.g., "This community traces the full arc of Li Kui's loyalty and violence, culminating in his death.").
+- `keywords`: 5-8 comma-separated keywords/phrases in Chinese. Mix event types, concept terms, and central entity names only if indispensable.
+
+**Output Format** - return a JSON array:
+[
+    {{
+        "id": "...",
+        "name": "...",
+        "summary": "...",
+        "key_events": ["event1", "event2"],
+        "timeline_phases": "... or \"\"",
+        "significance": "...",
+        "keywords": "kw1, kw2, kw3"
+    }}
+]
+
+**Example (for a Li Kui-related community, all in Chinese):**
+{{
+    "id": "comm_lk_01",
+    "name": "李逵的暴力忠义生涯",
+    "summary": "该社区记录了李逵从江州狱卒成长为梁山天杀星，最终被宋江毒死的完整叙事线。核心冲突在于其极端忠义与嗜杀本性，事件链呈现从解救宋江、为母杀虎，到为保护柴进杀人，最终被迫饮毒酒身亡。",
+    "key_events": [
+        "江州劫法场：李逵率先杀入法场救出宋江，开启梁山生涯",
+        "沂岭杀四虎：母亲被虎食，李逵怒杀四虎，后暴露身份被曹太公擒获",
+        "怒杀殷天锡：为保护柴进庄园，打死殷天锡，迫使柴进上梁山",
+        "饮毒酒身亡：宋江恐李逵造反，骗其同饮毒酒，李逵死前说‘生时服侍哥哥，死了也只是哥哥部下一个小鬼’"
+    ],
+    "timeline_phases": "上梁山前 → 梁山聚义 → 招安后征战 → 结局被毒杀",
+    "significance": "该社区完整呈现了李逵的角色弧线，是理解《水浒传》中‘愚忠’和‘暴力伦理’的关键案例。",
+    "keywords": "李逵, 江州劫法场, 杀虎, 忠义, 毒酒, 梁山好汉, 宋江"
+}}
+"""
         return prompt
 
     def _call_llm_api_batch(self, content: str) -> List[Dict]:
@@ -471,10 +502,6 @@ class FastTreeComm:
             for comm_id, members in batch:
                 try:
                     llm_info = llm_dict.get(str(comm_id), {})
-                    comm_name = llm_info.get("name", f"Community_{comm_id}")
-                    comm_summary = llm_info.get(
-                        "summary", f"Community of {len(members)} members"
-                    )
 
                     super_node_id = f"comm_{level}_{comm_id}"
                     member_names = [self.node_names[n] for n in members]
@@ -484,9 +511,13 @@ class FastTreeComm:
                         label="community",
                         level=level,
                         properties={
-                            "name": comm_name,
-                            "description": comm_summary,
+                            "name": llm_info.get("name", f"Community_{comm_id}"),
+                            "description": llm_info.get("summary", f"Community of {len(members)} members"),
                             "members": member_names,
+                            "key_events": llm_info.get("key_events", []),
+                            "timeline_phases": llm_info.get("timeline_phases", ""),
+                            "significance": llm_info.get("significance", ""),
+                            "keywords": llm_info.get("keywords", ""),
                         },
                     )
 
@@ -545,14 +576,16 @@ class FastTreeComm:
                 continue
 
             try:
-                keywords = self.extract_keywords_from_community(members)
                 super_node_id = f"comm_{level}_{comm_id}"
-                keyword_names = [self.node_names[k] for k in keywords]
+                if super_node_id not in self.graph.nodes:
+                    continue
 
-                if super_node_id in self.graph.nodes:
-                    self.graph.nodes[super_node_id]["properties"]["keywords"] = (
-                        keyword_names
-                    )
+                props = self.graph.nodes[super_node_id]["properties"]
+                # 仅当 LLM 没有生成 keywords 时，用结构度数+语义中心性回退
+                if not props.get("keywords"):
+                    keywords = self.extract_keywords_from_community(members)
+                    keyword_names = [self.node_names[k] for k in keywords]
+                    props["keywords"] = keyword_names
 
             except Exception as e:
                 logger.error(f"Error creating keywords for community {comm_id}: {e}")

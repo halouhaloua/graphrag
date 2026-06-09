@@ -10,7 +10,7 @@
   relation_index:  relation_name                           — 关系名
   triple_index:    f"{head_text},{keywords},{tail_text}     — 三元组语义
                    [ | description]"                        （keywords 优先，有 description 时追加）
-  comm_index:      f"{comm_name},{comm_description}"       — 社区主题
+  comm_index:      f"{comm_name},{comm_keywords}"           — 社区主题（keywords 优先）
 
 数据流：
   NetworkX MultiDiGraph → compute_graph_signature() → md5（含 relation+keywords+description）
@@ -344,7 +344,8 @@ def build_community_index(
 ) -> Tuple[faiss.Index, Dict[int, str]]:
     """构建社区 FAISS 索引
 
-    输入：所有 label="community" 节点的 name+description 文本。
+    输入：所有 label="community" 节点的 name+keywords 文本。
+    使用 LLM 生成的关键词（name,keywords），无关键词时回退到 name,description。
     跳过名称和描述均为空的社区节点。
 
     Args:
@@ -365,9 +366,12 @@ def build_community_index(
         data = graph.nodes[comm]
         props = data.get("properties", {})
         name = props.get("name", "")
-        description = props.get("description", "")
-        if name or description:
-            texts.append(f"{name},{description}".strip())
+        kw = props.get("keywords", "")
+        if isinstance(kw, list):
+            kw = ", ".join(kw)
+        kw = kw or props.get("description", "")
+        if name or kw:
+            texts.append(f"{name},{kw}".strip())
             valid_communities.append(comm)
     if not valid_communities:
         dim = _detect_dim(encoder)

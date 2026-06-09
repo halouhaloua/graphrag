@@ -53,7 +53,8 @@ prompts = {
             }}
         }}""",
         # 图构建提示词，演化模式
-        "construction_general_agent": """You are a Knowledge Graph Specialist responsible for extracting entities, attributes, and relationships from the input text. 
+        "construction_general_agent": """You are a Knowledge Graph Specialist responsible for extracting entities, 
+    attributes, and relationships from the input text. 
     Your task is to analyze the provided text and extract as many valuable entities,
     their attributes, and relations as possible in a structured JSON format.
 
