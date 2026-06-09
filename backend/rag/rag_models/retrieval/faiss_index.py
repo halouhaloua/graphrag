@@ -6,19 +6,20 @@
 - 提供搜索函数
 
 索引文本构成：
-  node_index:      f"{node_name},{node_description}"    — 实体语义
-  relation_index:  relation_name                         — 关系名
-  triple_index:    f"{head_text},{relation},{tail_text}" — 三元组语义
-  comm_index:      f"{comm_name},{comm_description}"     — 社区主题
+  node_index:      f"{node_name},{node_description}"       — 实体语义
+  relation_index:  relation_name                           — 关系名
+  triple_index:    f"{head_text},{keywords},{tail_text}     — 三元组语义
+                   [ | description]"                        （keywords 优先，有 description 时追加）
+  comm_index:      f"{comm_name},{comm_description}"       — 社区主题
 
 数据流：
-  NetworkX MultiDiGraph → compute_graph_signature() → md5
+  NetworkX MultiDiGraph → compute_graph_signature() → md5（含 relation+keywords+description）
     → build_all_indices() → FAISSIndexSet
     → save_index_set() / load_index_set() → 磁盘持久化
     → search_nodes() / search_relations() / search_triples() / search_communities()
 
 图签名机制：
-  - compute_graph_signature() 根据节点集+边集计算 MD5
+  - compute_graph_signature() 根据节点集+边集(含relation+keywords+description)计算 MD5
   - 所有缓存（FAISS/文本/倒排）共享此签名
   - 图变更 → 签名不匹配 → 全量重建
 """
@@ -83,7 +84,7 @@ class FAISSIndexSet:
 def compute_graph_signature(graph: nx.MultiDiGraph) -> str:
     """计算图的唯一签名（MD5）
 
-    对节点ID排序列表和边 (u:relation:v) 排序列表拼接后取 MD5。
+    对节点ID排序列表和边 (u:relation:keywords:description:v) 排序列表拼接后取 MD5。
     用于判断图是否发生变更，从而决定缓存是否失效。
 
     Args:
@@ -96,7 +97,8 @@ def compute_graph_signature(graph: nx.MultiDiGraph) -> str:
     """
     node_ids = sorted(graph.nodes())
     edges = sorted(
-        f"{u}:{data.get('relation', '')}:{v}" for u, v, data in graph.edges(data=True)
+        f"{u}:{data.get('relation', '')}:{data.get('keywords', '')}:{data.get('description', '')}:{v}"
+        for u, v, data in graph.edges(data=True)
     )
     content = "|".join(node_ids) + "||" + "|".join(edges)
     return hashlib.md5(content.encode()).hexdigest()
@@ -314,11 +316,15 @@ def build_triple_index(
     triples = []
     for u, v, data in graph.edges(data=True):
         if "relation" in data:
-            triples.append((u, data["relation"], v))
-    texts = [
-        f"{_get_node_text_simple(graph, h)},{r},{_get_node_text_simple(graph, t)}"
-        for h, r, t in triples
-    ]
+            kw = data.get("keywords") or data.get("relation", "")
+            desc = data.get("description", "")
+            triples.append((u, data["relation"], v, kw, desc))
+    texts = []
+    for h, r, t, kw, desc in triples:
+        idx_text = f"{_get_node_text_simple(graph, h)},{kw},{_get_node_text_simple(graph, t)}"
+        if desc:
+            idx_text += f" | {desc}"
+        texts.append(idx_text)
     if not texts:
         dim = _detect_dim(encoder)
         return faiss.IndexFlatIP(dim), {}
@@ -328,7 +334,7 @@ def build_triple_index(
     index = faiss.IndexFlatIP(dim)
     faiss.normalize_L2(embeddings_np)
     index.add(embeddings_np)
-    triple_map = {i: t for i, t in enumerate(triples)}
+    triple_map = {i: (u, rel, v) for i, (u, rel, v, kw, desc) in enumerate(triples)}
     return index, triple_map
 
 

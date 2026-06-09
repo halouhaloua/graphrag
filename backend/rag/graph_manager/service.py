@@ -365,15 +365,20 @@ async def ask_file_question_stream(
     all_triples = set()
     all_chunk_ids = set()
     all_chunk_contents: Dict[str, str] = {}
-    all_community_summaries: Dict[str, str] = {}
+    all_community_summaries: Dict[str, dict] = {}
 
     yield _sse(type="status", progress=65, message="初始检索...")
-    for _, sq in enumerate(sub_questions):
-        sq_text = sq.get("sub-question", question)
+    for i, sq in enumerate(sub_questions):
+        if isinstance(sq, str):
+            sq = {"sub-question": sq}
+            sub_questions[i] = sq
+        sq_text = sq.get("search_query") or sq.get("sub-question", question)
+        sq_type = sq.get("type", "micro")
         retrieval_results, elapsed = process_retrieval_results(
             state,
             sq_text,
             involved_types=involved_types,
+            retrieval_type=sq_type,
         )
         triples = retrieval_results.get("triples", []) or []
         chunk_ids = retrieval_results.get("chunk_ids", []) or []
@@ -390,7 +395,7 @@ async def ask_file_question_stream(
         for cs in retrieval_results.get("community_summaries", []):
             cs_name = cs.get("name", "")
             if cs_name:
-                all_community_summaries[cs_name] = cs.get("description", "")
+                all_community_summaries[cs_name] = cs
         reasoning_steps.append(
             {
                 "type": "sub_question",
@@ -415,15 +420,18 @@ async def ask_file_question_stream(
     initial_chunk_contents = _merge_chunk_contents(
         initial_chunk_ids, all_chunk_contents
     )
-    community_summaries_strs = [
-        f"{name}: {desc}" for name, desc in all_community_summaries.items()
-    ]
+    community_str_parts = []
+    for cs_data in list(all_community_summaries.values())[:5]:
+        parts = [f"【{cs_data.get('name', '')}】{cs_data.get('description', '')}"]
+        for km in cs_data.get("key_members", [])[:5]:
+            parts.append(f"  - {km['name']}: {km['description']}")
+        community_str_parts.append("\n".join(parts))
     context_initial = (
         (
             "=== Community Summaries ===\n"
-            + "\n".join(community_summaries_strs[:5])
+            + "\n---\n".join(community_str_parts)
             + "\n"
-            if community_summaries_strs
+            if community_str_parts
             else ""
         )
         + "=== Triples ===\n"
@@ -538,15 +546,18 @@ async def ask_file_question_stream(
         loop_triples = _dedup(list(all_triples))
         loop_chunk_ids = list(set(all_chunk_ids))
         loop_chunk_contents = _merge_chunk_contents(loop_chunk_ids, all_chunk_contents)
-        loop_community_strs = [
-            f"{name}: {desc}" for name, desc in all_community_summaries.items()
-        ]
+        loop_community_parts = []
+        for cs_data in list(all_community_summaries.values())[:5]:
+            parts = [f"【{cs_data.get('name', '')}】{cs_data.get('description', '')}"]
+            for km in cs_data.get("key_members", [])[:5]:
+                parts.append(f"  - {km['name']}: {km['description']}")
+            loop_community_parts.append("\n".join(parts))
         loop_ctx = (
             (
                 "=== Community Summaries ===\n"
-                + "\n".join(loop_community_strs[:5])
+                + "\n---\n".join(loop_community_parts)
                 + "\n"
-                if loop_community_strs
+                if loop_community_parts
                 else ""
             )
             + "=== Triples ===\n"
@@ -641,7 +652,7 @@ async def ask_file_question_stream(
             for cs in new_ret.get("community_summaries", []):
                 cs_name = cs.get("name", "")
                 if cs_name:
-                    all_community_summaries[cs_name] = cs.get("description", "")
+                    all_community_summaries[cs_name] = cs
         except Exception as e:
             logger.error(f"Iterative retrieval failed: {e}")
             break

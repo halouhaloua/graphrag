@@ -1,3 +1,17 @@
+"""图数据的 JSON/GraphML 序列化与反序列化。
+
+功能：
+- load_graph_from_json / load_graph_from_json_data：从 JSON 重建 NetworkX 图
+- save_graph_to_json / save_graph_to_graphml：将图保存为 JSON 或 GraphML
+- 支持边上额外的 keywords + description 字段
+- compute_graph_signature：基于节点集+边集生成唯一签名
+
+数据流：
+  format_output(knowledge_graph) → JSON list
+    → DB → load_graph_from_json_data(graph_data) → NetworkX MultiDiGraph
+    → build_all_indices(graph) → FAISS 索引
+"""
+
 import networkx as nx
 import json
 
@@ -106,7 +120,12 @@ def load_graph_from_json(input_path: str) -> nx.MultiDiGraph:
         # Add edge
         start_id = node_mapping[start_key]
         end_id = node_mapping[end_key]
-        graph.add_edge(start_id, end_id, relation=relation)
+        edge_attrs = {"relation": relation}
+        if "keywords" in rel:
+            edge_attrs["keywords"] = rel["keywords"]
+        if "description" in rel:
+            edge_attrs["description"] = rel["description"]
+        graph.add_edge(start_id, end_id, **edge_attrs)
 
     return graph
 
@@ -179,7 +198,12 @@ def load_graph_from_json_data(relationships: list) -> nx.MultiDiGraph:
 
         start_id = node_mapping[start_key]
         end_id = node_mapping[end_key]
-        graph.add_edge(start_id, end_id, relation=relation)
+        edge_attrs = {"relation": relation}
+        if "keywords" in rel:
+            edge_attrs["keywords"] = rel["keywords"]
+        if "description" in rel:
+            edge_attrs["description"] = rel["description"]
+        graph.add_edge(start_id, end_id, **edge_attrs)
 
     return graph
 
@@ -220,6 +244,10 @@ def save_graph_to_json(graph: nx.MultiDiGraph, output_path: str):
                 "properties": v_data["properties"],
             },
         }
+        if "keywords" in data:
+            relationship["keywords"] = data["keywords"]
+        if "description" in data:
+            relationship["description"] = data["description"]
         output.append(relationship)
 
     with open(output_path, "w", encoding="utf-8") as f:

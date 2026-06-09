@@ -1,25 +1,25 @@
 """检索核心编排层
 
 职责：
-1. RetrievalState：检索运行时的状态容器
-2. init_retrieval_state：从 graph_data 创建初始状态
-3. build_retrieval_indices：加载/重建 FAISS 索引、文本缓存、倒排索引
-4. retrieve：主编排入口（单路径/双路径）
+1. RetrievalState：检索运行时的状态容器（含 top_k_triple / top_k_chunk / chunk_to_triple_positions）
+2. init_retrieval_state：从 graph_data + chunks_data 创建初始状态
+3. build_retrieval_indices：加载/重建 FAISS 索引、文本缓存、倒排索引、chunk→triple 位置映射
+4. retrieve：主编排入口（单路径/双路径），支持 adj_triple/adj_chunk 调整
 5. retrieve_with_type_filter：Schema 类型过滤编排
-6. process_retrieval_results：完整处理流水线（检索→评分→格式化→社区摘要）
+6. process_retrieval_results：完整处理流水线，支持 retrieval_type 参数（micro/macro）
 
 整体数据流：
-  init_retrieval_state(graph_data, config, chunks_data)
-    → RetrievalState  # 包含图、编码器、LLM 客户端、配置、缓存目录
+  init_retrieval_state(graph_data, config, chunks_data, top_k_triple, top_k_chunk)
+    → RetrievalState
   build_retrieval_indices(state)
-    → state.faiss, node_text_cache, node_text_index, chunk_index  # 惰性加载
-  process_retrieval_results(state, question, involved_types)
+    → state.faiss, node_text_cache, node_text_index, chunk_index, chunk_to_triple_positions
+  process_retrieval_results(state, question, involved_types, retrieval_type)
     → {
-        "triples": [str, ...],           # format_scored_triples 结果（已合并）
-        "chunk_ids": [str, ...],         # 所有关联的 chunk_id 集合
-        "chunk_contents": {id: text},    # chunk_id → 文本内容
-        "chunk_retrieval_results": {...},# 直接语义检索的 chunk 结果
-        "community_summaries": [dict]    # 关联社区摘要
+        "triples": [str, ...],           # format_scored_triples（含 description 行）
+        "chunk_ids": [str, ...],         # 所有关联的 chunk_id（直接召回 ∪ 三元组回溯）
+        "chunk_contents": {id: text},
+        "chunk_retrieval_results": {...},
+        "community_summaries": [dict]    # 含 key_members 增强信息
       }
     , retrieval_time (秒)
 
@@ -27,6 +27,7 @@
   - recall_paths=1: 仅 Path1（节点/关系/关键词/chunk）
   - recall_paths=2: Path1 + Path2（三元组索引/社区）并行
   - involved_types 非空时：Path1 做 Schema 类型过滤，Path2 不变
+  - retrieval_type: "micro"（微观，偏实体/chunk）| "macro"（宏观，偏三元组/社区）
 """
 
 import threading
@@ -189,7 +190,11 @@ def init_retrieval_state(
                     props = rel.get(side, {}).get("properties", {})
                     cid = props.get("chunk id")
                     if cid:
-                        chunk_id_set.add(str(cid))
+                        if isinstance(cid, list):
+                            for c in cid:
+                                chunk_id_set.add(str(c))
+                        else:
+                            chunk_id_set.add(str(cid))
             if chunk_id_set:
                 logger.warning(
                     f"chunks_data is empty for dataset {dataset}, "
@@ -267,12 +272,20 @@ def build_retrieval_indices(state: RetrievalState):
             if h_data:
                 h_cid = h_data.get("properties", {}).get("chunk id")
                 if h_cid:
-                    chunk_to_pos.setdefault(h_cid, []).append(pos)
+                    if isinstance(h_cid, list):
+                        for c in h_cid:
+                            chunk_to_pos.setdefault(c, []).append(pos)
+                    else:
+                        chunk_to_pos.setdefault(h_cid, []).append(pos)
             t_data = state.graph.nodes.get(t_id)
             if t_data:
                 t_cid = t_data.get("properties", {}).get("chunk id")
                 if t_cid:
-                    chunk_to_pos.setdefault(t_cid, []).append(pos)
+                    if isinstance(t_cid, list):
+                        for c in t_cid:
+                            chunk_to_pos.setdefault(c, []).append(pos)
+                    else:
+                        chunk_to_pos.setdefault(t_cid, []).append(pos)
         state.chunk_to_triple_positions = chunk_to_pos
         logger.debug(
             f"Built chunk_to_triple_positions for {len(chunk_to_pos)} chunks "
@@ -359,6 +372,8 @@ def retrieve(
     state: RetrievalState,
     question: str,
     involved_types: dict,
+    adj_triple: int = None,
+    adj_chunk: int = None,
 ) -> Tuple[torch.Tensor, Dict]:
     """主编排入口
 
@@ -366,20 +381,26 @@ def retrieve(
     - 1：仅 Path1（节点/关系检索）
     - 2：Path1 + Path2 并行检索
 
-    关键词在主调线程中提取（避免 spaCy 线程安全问题），
-    传入 Path1 时已提取完毕。
-
     Args:
         state (`RetrievalState`): 检索状态
         question (`str`): 用户问题
         involved_types (`dict`):
-            涉及的数据类型（当前未用于普通检索，仅供接口统一）
+            涉及的数据类型
+        adj_triple (`int`, optional):
+            调整后的三元组 top_k，None 时使用 state.top_k_triple
+        adj_chunk (`int`, optional):
+            调整后的 chunk top_k，None 时使用 state.top_k_chunk
 
     Returns:
         `Tuple[torch.Tensor, Dict]`:
             - query_embed: 查询嵌入向量
-            - result: 检索结果 dict，包含 "path1_results" / "path2_results" / "chunk_ids"
+            - result: 检索结果 dict
     """
+    if adj_triple is None:
+        adj_triple = state.top_k_triple
+    if adj_chunk is None:
+        adj_chunk = state.top_k_chunk
+
     if not state.indices_built:
         build_retrieval_indices(state)
 
@@ -398,14 +419,14 @@ def retrieve(
             state.node_text_index,
             _chunk_retrieval_fn(state),
             state.config,
-            state.top_k_triple,
+            adj_triple,
         )
         chunk_ids = extract_chunk_ids_from_nodes(state.graph, path1["top_nodes"])
         if path1.get("chunk_results"):
             chunk_ids.update(path1["chunk_results"].get("chunk_ids", []))
         result = {"path1_results": path1, "chunk_ids": list(chunk_ids)}
     else:
-        result = _parallel_dual_path(state, question_embed, question, keywords)
+        result = _parallel_dual_path(state, question_embed, question, keywords, adj_triple=adj_triple)
 
     return question_embed, result
 
@@ -415,6 +436,7 @@ def _parallel_dual_path(
     question_embed: torch.Tensor,
     question: str,
     keywords: List[str],
+    adj_triple: int = None,
 ) -> Dict:
     """双路径检索
 
@@ -436,12 +458,12 @@ def _parallel_dual_path(
     """
     path2_result = [None]
 
+    if adj_triple is None:
+        adj_triple = state.top_k_triple
+
     def _run_path2():
         path2_result[0] = retrieve_path2(
-            state.graph,
-            state.faiss,
-            question_embed,
-            state.top_k_triple,
+            state.graph, state.faiss, question_embed, adj_triple,
         )
 
     path2_thread = threading.Thread(target=_run_path2)
@@ -458,7 +480,7 @@ def _parallel_dual_path(
         state.node_text_index,
         _chunk_retrieval_fn(state),
         state.config,
-        state.top_k_triple,
+        adj_triple,
     )
 
     path2_thread.join()
@@ -489,6 +511,8 @@ def retrieve_with_type_filter(
     state: RetrievalState,
     question: str,
     involved_types: dict,
+    adj_triple: int = None,
+    adj_chunk: int = None,
 ) -> Tuple[torch.Tensor, Dict]:
     """带 Schema 类型过滤的检索
 
@@ -500,16 +524,24 @@ def retrieve_with_type_filter(
         question (`str`): 用户问题
         involved_types (`dict`):
             {"nodes": [...], "relations": [...], "attributes": [...]}
-            从 GraphQ 分解中获取
+        adj_triple (`int`, optional):
+            调整后的三元组 top_k
+        adj_chunk (`int`, optional):
+            调整后的 chunk top_k
 
     Returns:
         `Tuple[torch.Tensor, Dict]`:
             同 retrieve() 的返回格式
     """
+    if adj_triple is None:
+        adj_triple = state.top_k_triple
+    if adj_chunk is None:
+        adj_chunk = state.top_k_chunk
+
     if not involved_types or not any(
         involved_types.get(k, []) for k in ["nodes", "relations", "attributes"]
     ):
-        return retrieve(state, question)
+        return retrieve(state, question, {}, adj_triple=adj_triple, adj_chunk=adj_chunk)
 
     question_embed = _get_query_embedding(state, question)
     target_node_types = involved_types.get("nodes", [])
@@ -525,14 +557,13 @@ def retrieve_with_type_filter(
                 "chunk_ids": hybrid.get("chunk_ids", []),
             }
         else:
-            _, result = retrieve(state, question)
+            _, result = retrieve(state, question, {}, adj_triple=adj_triple, adj_chunk=adj_chunk)
     else:
-        # Path1 类型过滤 + Path2 原始检索，避免重复计算查询嵌入
         hybrid = _hybrid_type_filtered(
             state, question_embed, question, target_node_types
         )
         path2_results = retrieve_path2(
-            state.graph, state.faiss, question_embed, state.top_k_triple
+            state.graph, state.faiss, question_embed, adj_triple
         )
         chunk_ids = hybrid.get("chunk_ids", [])
         path2_chunk_ids = extract_chunk_ids_from_triples(
@@ -615,6 +646,7 @@ def process_retrieval_results(
     state: RetrievalState,
     question: str,
     involved_types: dict = None,
+    retrieval_type: str = "micro",
 ) -> Tuple[Dict, float]:
     """完整的检索处理流水线
 
@@ -630,6 +662,7 @@ def process_retrieval_results(
         question (`str`): 用户问题
         involved_types (`dict`, optional):
             {"nodes": [...], "relations": [...], "attributes": [...]}
+        retrieval_type (`str`): 检索类型 "micro" | "macro"，决定 top_k 缩放
 
     Returns:
         `Tuple[Dict, float]`:
@@ -643,12 +676,26 @@ def process_retrieval_results(
     """
     start = time.time()
 
+    # 根据 retrieval_type 计算调整后的 top_k
+    type_scales = getattr(
+        getattr(state.config, "retrieval", None),
+        "retrieval_type_scales", {},
+    ).get(retrieval_type)
+    if type_scales:
+        adj_triple = max(1, int(state.top_k_triple * type_scales.path2_scale))
+        adj_chunk = max(1, int(state.top_k_chunk * type_scales.chunk_scale))
+    else:
+        adj_triple = state.top_k_triple
+        adj_chunk = state.top_k_chunk
+
     if involved_types:
         question_embed, results = retrieve_with_type_filter(
-            state, question, involved_types
+            state, question, involved_types, adj_triple=adj_triple, adj_chunk=adj_chunk
         )
     else:
-        question_embed, results = retrieve(state, question)
+        question_embed, results = retrieve(
+            state, question, involved_types, adj_triple=adj_triple, adj_chunk=adj_chunk
+        )
 
     retrieval_time = time.time() - start
 
@@ -670,7 +717,7 @@ def process_retrieval_results(
 
     # 三元组评分与合并
     scored_triples = _collect_all_scored(state, results, question_embed)
-    limited_scored = scored_triples[:state.top_k_triple]
+    limited_scored = scored_triples[:adj_triple]
     formatted_triples = format_scored_triples(state.graph, limited_scored)
     triple_chunk_ids = extract_chunk_ids_from_triples(state.graph, limited_scored)
 
@@ -682,7 +729,9 @@ def process_retrieval_results(
             matching_chunks[cid] = state.chunk2id[cid]
 
     # 社区摘要
-    community_summaries = collect_community_summaries(state.graph, limited_scored)
+    community_summaries = collect_community_summaries(
+        state.graph, limited_scored, chunk2id=state.chunk2id
+    )
 
     retrieval_results = {
         "triples": formatted_triples,

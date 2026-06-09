@@ -2,12 +2,13 @@
 
 功能：
 - 从社区节点展开其成员实体
-- 从检索到的三元组反向收集关联的社区摘要
+- 从检索到的三元组反向收集关联的社区摘要（含关键人物信息）
 
 数据流：
   get_community_nodes(graph, comm_node_id, name_to_id) → [实体节点ID, ...]
-  collect_community_summaries(graph, scored_triples)
-    → [{"name": str, "description": str, "members": list, "keywords": list}, ...]
+  collect_community_summaries(graph, scored_triples, chunk2id)
+    → [{"name": str, "description": str, "members": list, "keywords": list,
+         "key_members": [{"name", "description", "chunk_excerpt"}, ...]}, ...]
 
 社区节点结构（由 constructor/tree_comm.py 创建）：
   label: "community"
@@ -20,9 +21,17 @@
   实体节点通过 "member_of" 边指向所属社区超节点。
 """
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import networkx as nx
+
+
+def _find_node_by_name(graph: nx.MultiDiGraph, name: str) -> Optional[str]:
+    """通过节点名称查找节点 ID"""
+    for nid, ndata in graph.nodes(data=True):
+        if ndata.get("properties", {}).get("name") == name:
+            return nid
+    return None
 
 
 def get_community_nodes(
@@ -74,17 +83,20 @@ def get_community_nodes(
 def collect_community_summaries(
     graph: nx.MultiDiGraph,
     scored_triples: List[Tuple],
+    chunk2id: Dict[str, str] = None,
 ) -> List[Dict]:
-    """从检索到的三元组收集关联的社区摘要
+    """从检索到的三元组收集关联的社区摘要（含关键人物信息）
 
     遍历三元组中的头尾实体节点，
     沿 member_of 边找到所属社区，
-    返回去重后的社区信息。
+    从成员节点的 description 和 chunk 中提取关键信息。
 
     Args:
         graph (`nx.MultiDiGraph`): 图对象
         scored_triples (`List[Tuple]`):
             [(头ID, 关系, 尾ID, score), ...]
+        chunk2id (`Dict[str, str]`, optional):
+            {chunk_id: chunk_text}
 
     Returns:
         `List[Dict]`:
@@ -93,11 +105,14 @@ def collect_community_summaries(
                     "name": "社区名称",
                     "description": "社区摘要",
                     "members": ["实体名1", ...],
-                    "keywords": ["关键词1", ...]
+                    "keywords": ["关键词1", ...],
+                    "key_members": [
+                        {"name": "...", "description": "...", "chunk_excerpt": "..."},
+                        ...
+                    ],
                 },
                 ...
             ]
-            按发现顺序，自动去重
     """
     community_set = {}
     for item in scored_triples:
@@ -110,10 +125,36 @@ def collect_community_summaries(
                     if neighbor not in community_set:
                         comm_data = graph.nodes.get(neighbor, {})
                         props = comm_data.get("properties", {})
+
+                        name = props.get("name", "")
+                        description = props.get("description", "")
+                        members = props.get("members", [])
+                        keywords = props.get("keywords", [])
+
+                        # 收集关键人物信息
+                        key_members = []
+                        for m_name in members[:10]:
+                            m_node = _find_node_by_name(graph, m_name)
+                            if m_node is not None:
+                                m_props = graph.nodes[m_node].get("properties", {})
+                                m_desc = m_props.get("description", "")
+                                m_cid_raw = m_props.get("chunk id")
+                                m_chunk = ""
+                                if m_cid_raw:
+                                    m_cid = m_cid_raw[0] if isinstance(m_cid_raw, list) else m_cid_raw
+                                    if chunk2id and m_cid in chunk2id:
+                                        m_chunk = chunk2id[m_cid][:200]
+                                key_members.append({
+                                    "name": m_name,
+                                    "description": m_desc[:150],
+                                    "chunk_excerpt": m_chunk,
+                                })
+
                         community_set[neighbor] = {
-                            "name": props.get("name", ""),
-                            "description": props.get("description", ""),
-                            "members": props.get("members", []),
-                            "keywords": props.get("keywords", []),
+                            "name": name,
+                            "description": description,
+                            "members": members,
+                            "keywords": keywords,
+                            "key_members": key_members,
                         }
     return list(community_set.values())

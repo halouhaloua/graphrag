@@ -15,15 +15,16 @@
       → LLM 提取 JSON:
         {
           "attributes": {"实体名": ["属性1", "属性2"]},
-          "triples": [["头实体", "关系", "尾实体"]],
+          "triples": [["头实体", "关系", "尾实体", "关键词(可选)", "描述(可选)"]],
           "entity_types": {"实体名": "schema_type"}
         }
       → _process_attributes() → 属性节点 (level=1) + has_attribute 边 + entity_descriptions dict
-      → _process_triples() → 实体节点 (level=2) + 关系边
+      → _process_triples() → 实体节点 (level=2) + 关系边（含 keywords + description）
     → triple_deduplicate() → 去重边
     → process_level4() → FastTreeComm 社区检测 → 社区节点 (level=4)
     → format_output()
-      → [{start_node: {label, properties}, relation, end_node: {label, properties}}]
+      → [{start_node: {label, properties}, relation, end_node: {label, properties},
+           keywords?, description?}]
 
 节点属性:
   entity:   {name, chunk id, schema_type?, description?, file_name?}
@@ -35,6 +36,7 @@ import json
 import os
 import threading
 import time
+from collections import Counter
 from concurrent import futures
 from typing import Any, Dict, List, Tuple
 
@@ -55,28 +57,35 @@ from rag.rag_models.constructor import tree_comm
 from rag.rag_models.constructor.schema_manager import load_schema, merge_schema_types
 from rag.rag_models.constructor.text_chunker import chunk_text
 from rag.utils import call_llm_api
+from rag.utils.text_normalizer import normalize_entity_name
 from loguru import logger
 
 
-def _validate_triple_format(triple: list) -> tuple | None:
-    """校验三元组格式并标准化。
+def _validate_triple_format(triple: list) -> dict | None:
+    """校验五元组格式并标准化。
+
+    五元组: [头实体, 关系, 尾实体, 关系关键词(可选), 关系描述(可选)]
 
     Args:
         triple (`list`):
-            原始三元组，期望至少 3 个元素: [subject, predicate, object]。
-            超过 3 个元素时截断为前 3 个。
+            原始元组，期望 3~5 个元素。
 
     Returns:
-        `tuple | None`:
-            标准化后的三元组 (subject, predicate, object)，
+        `dict | None`:
+            {"subject": str, "predicate": str, "object": str,
+             "keywords": str, "description": str}
             格式无效时返回 None。
     """
     try:
-        if len(triple) > 3:
-            triple = triple[:3]
-        elif len(triple) < 3:
+        if len(triple) < 3:
             return None
-        return tuple(triple)
+        return {
+            "subject": str(triple[0]).strip(),
+            "predicate": str(triple[1]).strip(),
+            "object": str(triple[2]).strip(),
+            "keywords": str(triple[3]).strip() if len(triple) > 3 and triple[3] else "",
+            "description": str(triple[4]).strip() if len(triple) > 4 and triple[4] else "",
+        }
     except Exception:
         return None
 
@@ -344,6 +353,7 @@ class KTBuilder:
                 实体节点 ID（如 "entity_0", "entity_1"）。
         """
         with self.lock:
+            entity_name = normalize_entity_name(entity_name)
             entity_node_id = next(
                 (
                     n
@@ -355,7 +365,7 @@ class KTBuilder:
             )
             if not entity_node_id:
                 entity_node_id = f"entity_{self.node_counter}"
-                properties = {"name": entity_name, "chunk id": chunk_id}
+                properties = {"name": entity_name, "chunk id": [chunk_id]}
                 if entity_type:
                     properties["schema_type"] = entity_type
                 if description:
@@ -366,6 +376,21 @@ class KTBuilder:
                     entity_node_id, label="entity", properties=properties, level=2
                 )
                 self.node_counter += 1
+            else:
+                # 跨 chunk 合并
+                existing = self.graph.nodes[entity_node_id]["properties"]
+                # 追加 chunk_id（去重）
+                existing_cids = existing.get("chunk id", [])
+                if isinstance(existing_cids, list):
+                    if chunk_id not in existing_cids:
+                        existing_cids.append(chunk_id)
+                # 合并 description（去重）
+                if description:
+                    old_desc = existing.get("description", "")
+                    old_items = {d.strip() for d in old_desc.replace("，", "、").split("、") if d.strip()} if old_desc else set()
+                    new_items = {d.strip() for d in description.replace("，", "、").split("、") if d.strip()}
+                    merged = old_items | new_items
+                    existing["description"] = "、".join(sorted(merged))
             return entity_node_id
 
     def _process_attributes(
@@ -459,10 +484,16 @@ class KTBuilder:
         if entity_descriptions is None:
             entity_descriptions = {}
         for triple in extracted_triples:
-            validated_triple = _validate_triple_format(triple)
-            if not validated_triple:
+            validated = _validate_triple_format(triple)
+            if not validated:
                 continue
-            subj, pred, obj = validated_triple
+            subj, pred, obj = (
+                normalize_entity_name(validated["subject"]),
+                normalize_entity_name(validated["predicate"]),
+                normalize_entity_name(validated["object"]),
+            )
+            if subj == obj:
+                continue
             subj_type = entity_types.get(subj) if entity_types else None
             obj_type = entity_types.get(obj) if entity_types else None
             subj_desc = entity_descriptions.get(subj, "")
@@ -473,7 +504,12 @@ class KTBuilder:
             obj_node_id = self._find_or_create_entity(
                 obj, chunk_id, obj_type, file_name, description=obj_desc
             )
-            self.graph.add_edge(subj_node_id, obj_node_id, relation=pred)
+            edge_attrs = {"relation": pred}
+            if validated.get("keywords"):
+                edge_attrs["keywords"] = validated["keywords"]
+            if validated.get("description"):
+                edge_attrs["description"] = validated["description"]
+            self.graph.add_edge(subj_node_id, obj_node_id, **edge_attrs)
 
     def process_level1_level2(self, chunk: str, chunk_id: int, file_name: str = ""):
         """处理一个 chunk：LLM 提取 → 属性处理 → 三元组处理。
@@ -676,6 +712,23 @@ class KTBuilder:
         logger.info(f"Construction Time: {end_construct - start_construct}s")
         logger.info(f"Successfully processed: {processed_count}/{total_docs} documents")
         logger.info(f"Failed: {failed_count} documents")
+
+        # 多数投票：统计各实体类型频次，取最高
+        type_counter: Dict[str, Counter] = {}
+        for nid, ndata in self.graph.nodes(data=True):
+            if ndata.get("label") == "entity":
+                name = ndata["properties"].get("name", "")
+                st = ndata["properties"].get("schema_type", "")
+                if name and st:
+                    if name not in type_counter:
+                        type_counter[name] = Counter()
+                    type_counter[name][st] += 1
+        for name, counts in type_counter.items():
+            majority = counts.most_common(1)[0][0]
+            for nid, ndata in self.graph.nodes(data=True):
+                if ndata.get("label") == "entity" and ndata["properties"].get("name") == name:
+                    ndata["properties"]["schema_type"] = majority
+
         logger.info(f"{'Processing Level 3 and 4':-^40}")
         self.triple_deduplicate()
         self.process_level4()
@@ -683,18 +736,32 @@ class KTBuilder:
     def triple_deduplicate(self):
         """去重图中的三元组边。
 
-        由于多个 chunk 可能提取出相同的 (头节点, 关系, 尾节点) 三元组，
-        此方法将重复边合并为一条，节点保持不变。
+        支持无向去重（A→B 与 B→A 视为同一条边），
+        跨 chunk 的 keywords 自动合并。
         """
         new_graph = nx.MultiDiGraph()
         for node, node_data in self.graph.nodes(data=True):
             new_graph.add_node(node, **node_data)
-        seen_triples = set()
+        seen_triples = {}
         for u, v, key, data in self.graph.edges(keys=True, data=True):
-            relation = data.get("relation")
-            if (u, v, relation) not in seen_triples:
-                seen_triples.add((u, v, relation))
-                new_graph.add_edge(u, v, **data)
+            relation = data.get("relation", "")
+            edge_key = (min(u, v), max(u, v), relation)
+            if edge_key not in seen_triples:
+                seen_triples[edge_key] = (u, v, dict(data))
+            else:
+                existing = seen_triples[edge_key][2]
+                kw = data.get("keywords", "") or ""
+                if kw:
+                    existing_kw = existing.get("keywords", "")
+                    existing_set = {w.strip() for w in existing_kw.split(",") if w.strip()} if existing_kw else set()
+                    new_set = {w.strip() for w in kw.split(",") if w.strip()}
+                    merged_set = existing_set | new_set
+                    existing["keywords"] = ", ".join(sorted(merged_set))
+                desc = data.get("description", "") or ""
+                if desc and not existing.get("description"):
+                    existing["description"] = desc
+        for edge_key, (orig_u, orig_v, merged_data) in seen_triples.items():
+            new_graph.add_edge(orig_u, orig_v, **merged_data)
         self.graph = new_graph
 
     def format_output(self) -> List[Dict[str, Any]]:
@@ -734,6 +801,10 @@ class KTBuilder:
                     "properties": v_data["properties"],
                 },
             }
+            if "keywords" in data:
+                relationship["keywords"] = data["keywords"]
+            if "description" in data:
+                relationship["description"] = data["description"]
             output.append(relationship)
         return output
 

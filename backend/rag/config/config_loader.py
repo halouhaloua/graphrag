@@ -1,6 +1,10 @@
 """
 Configuration loader and manager for KT-RAG framework.
 Handles loading, validation, and access to configuration parameters.
+
+Config classes:
+  - RetrievalTypeScale: per-type (micro/macro) top-k scaling factors
+  - RetrievalConfig: main retrieval config, includes retrieval_type_scales
 """
 
 import os
@@ -90,6 +94,14 @@ class AgentConfig:
 
 
 @dataclass
+class RetrievalTypeScale:
+    """检索类型对应的 top_k 缩放配置"""
+    path1_scale: float = 1.0
+    path2_scale: float = 1.0
+    chunk_scale: float = 1.0
+
+
+@dataclass
 class RetrievalConfig:
     top_k_triple: int = 5
     top_k_chunk: int = 5
@@ -101,6 +113,10 @@ class RetrievalConfig:
     enable_high_recall: bool = True
     enable_caching: bool = True
     triple_weight: float = 0.3
+    retrieval_type_scales: Dict[str, "RetrievalTypeScale"] = field(default_factory=lambda: {
+        "micro": RetrievalTypeScale(path1_scale=1.5, path2_scale=0.5, chunk_scale=1.5),
+        "macro": RetrievalTypeScale(path1_scale=0.5, path2_scale=1.5, chunk_scale=0.5),
+    })
     cache_dir: str = str(file_path / "retriever/faiss_cache_new")
     faiss: FAISSConfig = None
     agent: AgentConfig = None

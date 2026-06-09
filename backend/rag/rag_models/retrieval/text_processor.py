@@ -151,8 +151,9 @@ def get_node_chunk_id(graph: nx.MultiDiGraph, node_id: str) -> Optional[str]:
     """获取节点关联的文本块 ID
 
     兼容新旧数据结构：
-      新：node["properties"]["chunk id"]
-      旧：node["chunk id"]
+      新：node["properties"]["chunk id"] = List[str]
+      旧：node["properties"]["chunk id"] = str
+      更旧：node["chunk id"] = str
 
     该 chunk id 用于将检索到的实体反向关联回其来源文本块。
 
@@ -161,7 +162,7 @@ def get_node_chunk_id(graph: nx.MultiDiGraph, node_id: str) -> Optional[str]:
         node_id (`str`): 节点 ID
 
     Returns:
-        `Optional[str]`: chunk ID 字符串，不存在则返回 None
+        `Optional[str]`: chunk ID 字符串（列表时取首个），不存在则返回 None
     """
     if node_id not in graph.nodes:
         return None
@@ -169,6 +170,8 @@ def get_node_chunk_id(graph: nx.MultiDiGraph, node_id: str) -> Optional[str]:
     if isinstance(data.get("properties"), dict):
         chunk_id = data["properties"].get("chunk id")
         if chunk_id:
+            if isinstance(chunk_id, list):
+                return str(chunk_id[0]) if chunk_id else None
             return str(chunk_id)
     chunk_id = data.get("chunk id")
     return str(chunk_id) if chunk_id else None

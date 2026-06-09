@@ -4,7 +4,7 @@
 - 实体相似度计算（单节点 / 批量）
 - 三元组相关性评分（余弦相似度 + 关系类型加权）
 - 多路径结果合并排序
-- 三元组格式化输出（支持 (h,r) 去重合并）
+- 三元组格式化输出（支持 (h,r) 去重合并，含边描述行）
 
 数据流：
   compute_entity_similarity(encoder, query_embed, node_text) → float
@@ -15,7 +15,7 @@
   merge_and_sort_scored_triples(path1, path2_scored, ...)
     → [(h, r, t, score), ...]
   format_scored_triples(graph, scored_triples)
-    → [str]  # 已按 (h,r) 分组合并
+    → [str]  # 已按 (h,r) 分组合并，有 description 时追加 "  → {description}"
 """
 
 from collections import OrderedDict
@@ -329,7 +329,7 @@ def format_scored_triples(
                 ...
             ]
     """
-    groups: OrderedDict[Tuple[str, str], OrderedDict[str, float]] = OrderedDict()
+    groups: OrderedDict[Tuple[str, str], OrderedDict[str, Tuple[float, str]]] = OrderedDict()
     head_text_cache: Dict[str, str] = {}
 
     for h, r, t, score in scored_triples:
@@ -344,21 +344,38 @@ def format_scored_triples(
         key = (h, r)
         if key not in groups:
             groups[key] = OrderedDict()
-        # 去重 tail，保留最高分
+        # 去重 tail 文本，保留最高分和原始 tail 节点 ID
         if tail_text not in groups[key]:
-            groups[key][tail_text] = score
+            groups[key][tail_text] = (score, t)
         else:
-            groups[key][tail_text] = max(groups[key][tail_text], score)
+            existing = groups[key][tail_text][0]
+            groups[key][tail_text] = (max(existing, score), t)
+
+    def _get_desc(_h, _r, _tail_id) -> str:
+        if _tail_id not in graph.nodes:
+            return ""
+        edge_data = graph.get_edge_data(_h, _tail_id)
+        if not edge_data:
+            return ""
+        for attrs in edge_data.values():
+            if attrs.get("relation") == _r:
+                return attrs.get("description", "") or ""
+        return ""
 
     formatted = []
     for (h, r), tails in groups.items():
         head_text = head_text_cache.get(h, get_node_text(graph, h))
         tail_list = list(tails.keys())
-        best_score = max(tails.values())
+        best_score = max(v[0] for v in tails.values())
         if len(tail_list) == 1:
             triple_text = f"({head_text}, {r}, {tail_list[0]}) [score: {best_score:.3f}]"
         else:
             tails_joined = "、".join(tail_list)
             triple_text = f"({head_text}, {r}, {tails_joined}) [score: {best_score:.3f}]"
+        # 取第一个 tail 的原始节点 ID 查 description
+        first_tail_id = tails[tail_list[0]][1]
+        desc = _get_desc(h, r, first_tail_id)
+        if desc:
+            triple_text += f"\n  → {desc}"
         formatted.append(triple_text)
     return formatted
