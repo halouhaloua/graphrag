@@ -12,6 +12,7 @@ from rag.router import router as rag_router
 from rag.graph_manager.api import ws_router as rag_ws_router
 from core.websocket.router import router as websocket_router
 from chronicle_writer.api import router as chronicle_router
+from ai_workflow.router import router as ai_workflow_router
 from utils.auth_middleware import AuthPermissionMiddleware
 
 
@@ -35,6 +36,11 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时注册已发布的表单资源类型
     await register_published_forms()
+
+    # 注册工作流节点类型
+    from ai_workflow.nodes.loader import load_all_nodes
+
+    load_all_nodes()
 
     # 预热系统配置到 Redis
     from app.config_manager import config_manager
@@ -98,6 +104,11 @@ app.include_router(
 )
 app.include_router(
     chronicle_router, prefix="/api/chronicle", dependencies=[Depends(oauth2_scheme)]
+)
+app.include_router(
+    ai_workflow_router,
+    prefix="/api/ai-workflow",
+    dependencies=[Depends(oauth2_scheme)],
 )
 # WebSocket路由（不需要OAuth2依赖，WebSocket自己处理认证）
 app.include_router(websocket_router)

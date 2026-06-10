@@ -1,0 +1,76 @@
+# deep_research_team.yaml
+team_rules: "你们是一个出色的研究团队，你们致力于合作完成艰巨的工作"
+start_role: "COORDINATOR"
+
+roles:
+  COORDINATOR:
+    tools: ["handoff","user_input"]
+    prompt_template: "REACT_PROMPT"
+    agent_description: "一个友好的AI助手，名字是 proteus，专长于处理问候和闲聊，同时将其他复杂任务交给planner进行处理。"
+    agent_instruction: "COORDINATOR_PROMPT_TEMPLATES"
+    termination_conditions:
+      - type: "ToolTerminationCondition"
+        tool_names: ["final_answer"]
+    model_name: "qwen3-next-80b-a3b-instruct"
+    max_iterations: 25
+    llm_timeout: 360
+
+  PLANNER:
+    tools: ["handoff","user_input"]
+    prompt_template: "REACT_PROMPT"
+    agent_description: "专业的任务规划者角色，负责研究并规划信息收集任务，使用专业代理团队收集全面数据。"
+    agent_instruction: "PLANNER_PROMPT_TEMPLATES"
+    termination_conditions:
+      - type: "ToolTerminationCondition"
+        tool_names: ["final_answer"]
+    model_name: "qwen3-next-80b-a3b-instruct"
+    max_iterations: 25
+    llm_timeout: 360
+
+  RESEARCHER:
+    tools: ["web_crawler", "serper_search","user_input"]
+    prompt_template: "REACT_PROMPT"
+    agent_description: "专业的深度研究员角色，参考已获取信息以解决需求，如果参考信息不全面，使用工具自行获取。"
+    agent_instruction: "RESEARCHER_PROMPT_TEMPLATES"
+    termination_conditions:
+      - type: "ToolTerminationCondition"
+        tool_names: ["final_answer"]
+    model_name: "qwen3-next-80b-a3b-instruct"
+    max_iterations: 25
+    llm_timeout: 360
+
+  CODER:
+    tools: ["python_execute","user_input"]
+    prompt_template: "REACT_PROMPT"
+    agent_description: "精通Python脚本编写的专业软件专家角色，负责分析需求，使用Python实现高效解决方案，并清晰地记录方法和结果。"
+    agent_instruction: "CODER_PROMPT_TEMPLATES"
+    termination_conditions:
+      - type: "ToolTerminationCondition"
+        tool_names: ["final_answer"]
+    model_name: "qwen3-next-80b-a3b-instruct"
+    max_iterations: 25
+    llm_timeout: 360
+
+  PAPER_SEARCH_EXPERT:
+    tools: ["arxiv_search","user_input"]
+    prompt_template: "REACT_PROMPT"
+    agent_description: "论文搜索专家角色，擅长根据主题搜索论文，切记：只负责论文搜索任务"
+    agent_instruction: "PAPER_PROMPT_TEMPLATES"
+    termination_conditions:
+      - type: "ToolTerminationCondition"
+        tool_names: ["final_answer"]
+    model_name: "qwen3-next-80b-a3b-instruct"
+    max_iterations: 25
+    llm_timeout: 360
+
+  REPORTER:
+    tools: ["file_write","user_input"]
+    prompt_template: "REACT_PROMPT"
+    agent_description: "专业的报告撰写者角色，负责仅基于提供的信息和可验证事实撰写清晰、全面的有关 **报告主题** 的报告、稿件、传记、研究等。"
+    agent_instruction: "REPORTER_PROMPT_TEMPLATES"
+    termination_conditions:
+      - type: "ToolTerminationCondition"
+        tool_names: ["file_write"]
+    model_name: "qwen3-next-80b-a3b-instruct"
+    max_iterations: 25
+    llm_timeout: 360
