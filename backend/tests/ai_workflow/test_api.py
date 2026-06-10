@@ -9,14 +9,14 @@
 import pytest
 from pydantic import ValidationError
 
-from ai_workflow.schema import (
+from ai_workflow.workflow.schema import (
     WorkflowDefCreate,
     WorkflowDefNodeSchema,
     WorkflowDefEdgeSchema,
     WorkflowDefOut,
     WorkflowRunRequest,
 )
-from ai_workflow.api.events import WorkflowEventType
+from ai_workflow.workflow.events import WorkflowEventType
 
 
 class TestWorkflowDefCreateSchema:

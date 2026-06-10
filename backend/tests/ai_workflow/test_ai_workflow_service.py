@@ -8,7 +8,7 @@
 
 import pytest
 
-from ai_workflow.service import WorkflowEngine
+from ai_workflow.workflow.service import WorkflowEngine
 
 
 class TestValidateDAG:

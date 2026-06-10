@@ -185,7 +185,7 @@ async def run_team(
     return {"message": "团队任务已启动", "team_id": team_id}
 
 
-@router.get("/{team_id}/stream", summary="SSE 流式运行团队")
+@router.post("/{team_id}/stream", summary="SSE 流式运行团队")
 async def stream_team(
     team_id: str,
     req: TeamRunRequest = Body(None),
@@ -200,7 +200,12 @@ async def stream_team(
 
         async with AsyncSessionLocal() as exec_db:
             task = asyncio.create_task(
-                TeamExecutor.execute_team(config, None, exec_db, stream_queue=queue)
+                TeamExecutor.execute_team(
+                    config,
+                    req.input_params if req else None,
+                    exec_db,
+                    stream_queue=queue,
+                )
             )
             try:
                 while True:

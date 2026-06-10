@@ -7,7 +7,7 @@ from typing import Any, Optional
 from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ai_workflow.api.events import WorkflowEventType
+from ai_workflow.workflow.events import WorkflowEventType
 from ai_workflow.nodes.base import BaseNode, NodeContext
 from ai_workflow.nodes.registry import NodeRegistry
 from ai_workflow.team.model import TeamConfig

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from ai_workflow.routes import router as api_router
+from ai_workflow.workflow.api import router as api_router
 from ai_workflow.team.api import router as team_router
 
 router = APIRouter()

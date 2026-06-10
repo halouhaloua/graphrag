@@ -13,9 +13,9 @@ from app.base_schema import PaginatedResponse
 from utils.security import get_current_user
 from core.user.model import User
 
-from ai_workflow.api.events import WorkflowEventType
-from ai_workflow.model import WorkflowDef, WorkflowInstance, WorkflowNodeLog
-from ai_workflow.schema import (
+from ai_workflow.workflow.events import WorkflowEventType
+from ai_workflow.workflow.model import WorkflowDef, WorkflowInstance, WorkflowNodeLog
+from ai_workflow.workflow.schema import (
     WorkflowDefCreate,
     WorkflowDefUpdate,
     WorkflowDefOut,
@@ -23,7 +23,7 @@ from ai_workflow.schema import (
     WorkflowNodeLogOut,
     WorkflowRunRequest,
 )
-from ai_workflow.service import WorkflowEngine
+from ai_workflow.workflow.service import WorkflowEngine
 from ai_workflow.nodes.registry import NodeRegistry
 
 router = APIRouter(tags=["AI工作流"])

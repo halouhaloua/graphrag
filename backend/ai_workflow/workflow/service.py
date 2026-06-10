@@ -10,8 +10,8 @@ from typing import Any, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ai_workflow.api.events import WorkflowEventType
-from ai_workflow.model import WorkflowDef, WorkflowInstance, WorkflowNodeLog
+from ai_workflow.workflow.events import WorkflowEventType
+from ai_workflow.workflow.model import WorkflowDef, WorkflowInstance, WorkflowNodeLog
 from ai_workflow.nodes.base import BaseNode, NodeContext
 from ai_workflow.nodes.registry import NodeRegistry
 
