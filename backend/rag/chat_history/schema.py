@@ -5,7 +5,7 @@ from datetime import datetime
 
 class ChatConversationCreate(BaseModel):
     title: Optional[str] = "新对话"
-    user_id: str
+    user_id: Optional[str] = None
     model_name: Optional[str] = "qwen"
 
 
@@ -17,7 +17,7 @@ class ChatMessageCreate(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    user_id: str
+    user_id: Optional[str] = None
     conversation_id: Optional[str] = None
     question: str
     model_name: Optional[str] = "qwen"

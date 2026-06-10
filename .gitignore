@@ -13,6 +13,7 @@ retriever/
 ocr_test/
 data/
 bge-small-zh-v1.5/
+ai_workflow/
 # =========== IDE / 编辑器 ===========
 .idea/
 .vscode/

@@ -269,6 +269,9 @@ async def add_file_to_kb(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    from rag.kb_manager.service import KnowledgeBasePermissionService
+    if not await KnowledgeBasePermissionService.check_kb_access(db, data.kb_id, current_user):
+        raise HTTPException(status_code=403, detail="无权访问该知识库")
     result = await RagFileManagerService.add_to_knowledge_base(
         db, file_id, data.kb_id, creator_id=current_user.id
     )

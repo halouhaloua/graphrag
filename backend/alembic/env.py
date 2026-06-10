@@ -21,7 +21,7 @@ def auto_import_models():
     project_root = Path(__file__).parent.parent
 
     # 需要扫描的目录（可以添加更多）
-    scan_dirs = ["core", "scheduler", "online_dev", "rag", "chronicle_writer"]
+    scan_dirs = ["core", "scheduler", "online_dev", "rag", "chronicle_writer", "ai_workflow"]
 
     for scan_dir in scan_dirs:
         scan_path = project_root / scan_dir

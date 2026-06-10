@@ -18,41 +18,69 @@ from rag.chat_history.service import (
     ChatConversation,
 )
 from rag.graph_manager.service import ask_file_question_stream
+from rag.kb_manager.db_service import KnowledgeBaseFileService
+from rag.kb_manager.service import KnowledgeBasePermissionService
+from utils.security import get_current_user
+from core.user.model import User
 
 router = APIRouter(prefix="/chat", tags=["聊天记录增删改查"])
 
 
 @router.post("/conversation/create", response_model=ChatConversationResponse)
 async def create_conversation(
-    data: ChatConversationCreate, db: AsyncSession = Depends(get_db)
+    data: ChatConversationCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    return await ChatConversationService.create(db, data)
+    conv_data = ChatConversationCreate(
+        title=data.title,
+        user_id=user.id,
+        model_name=data.model_name,
+    )
+    return await ChatConversationService.create(db, conv_data)
 
 
-@router.get("/conversations/{user_id}", response_model=List[ChatConversationResponse])
+@router.get("/conversations", response_model=List[ChatConversationResponse])
 async def get_user_conversations(
-    user_id: str, page: int = 1, page_size: int = 20, db: AsyncSession = Depends(get_db)
+    page: int = 1,
+    page_size: int = 20,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     items, total = await ChatConversationService.get_user_conversations(
-        db, user_id, page, page_size
+        db, user.id, page, page_size
     )
     return items
 
 
 @router.get("/history/{conversation_id}", response_model=List[ChatMessageResponse])
-async def get_chat_history(conversation_id: str, db: AsyncSession = Depends(get_db)):
+async def get_chat_history(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    conv = await ChatConversationService.get_by_id(db, conversation_id)
+    if not conv or conv.user_id != user.id:
+        raise HTTPException(status_code=404, detail="会话不存在")
     return await ChatMessageService.get_messages_by_conversation(db, conversation_id)
 
 
 @router.delete("/conversation/{conversation_id}")
-async def delete_conversation(conversation_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_conversation(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    conv = await ChatConversationService.get_by_id(db, conversation_id)
+    if not conv or conv.user_id != user.id:
+        raise HTTPException(status_code=404, detail="会话不存在")
     success = await ChatConversationService.delete(db, conversation_id)
     if not success:
         raise HTTPException(status_code=404, detail="会话不存在")
     return {"msg": "删除成功"}
 
 
-async def _sse_stream_with_persistence(req: ChatRequest, conversation_id: str):
+async def _sse_stream_with_persistence(req: ChatRequest, conversation_id: str, user_id: str):
     answer_parts: List[str] = []
     sub_questions = []
     retrieved_triples = []
@@ -62,7 +90,7 @@ async def _sse_stream_with_persistence(req: ChatRequest, conversation_id: str):
 
     async with AsyncSessionLocal() as kb_session:
         async for raw_event in ask_file_question_stream(
-            req.file_id, req.question, req.user_id, kb_session
+            req.file_id, req.question, user_id, kb_session
         ):
                 if raw_event.startswith("data: "):
                     try:
@@ -105,18 +133,32 @@ async def _sse_stream_with_persistence(req: ChatRequest, conversation_id: str):
 
 
 @router.post("/message/chat")
-async def chat_completion(req: ChatRequest, db: AsyncSession = Depends(get_db)):
+async def chat_completion(
+    req: ChatRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     if not req.file_id:
         raise HTTPException(status_code=400, detail="file_id is required for graph-based chat")
+
+    kb_file = await KnowledgeBaseFileService.get_by_id(db, req.file_id)
+    if not kb_file:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    if not await KnowledgeBasePermissionService.check_kb_access(db, kb_file.kb_id, user):
+        raise HTTPException(status_code=403, detail="无权访问该知识库")
+
     if not req.conversation_id:
         conv_data = ChatConversationCreate(
-            user_id=req.user_id,
+            user_id=user.id,
             title=req.question[:20] + "...",
             model_name=req.model_name,
         )
         conv: ChatConversation = await ChatConversationService.create(db, conv_data)
         conversation_id = conv.id
     else:
+        conv = await ChatConversationService.get_by_id(db, req.conversation_id)
+        if not conv or conv.user_id != user.id:
+            raise HTTPException(status_code=404, detail="会话不存在")
         conversation_id = req.conversation_id
 
     user_msg = ChatMessageCreate(
@@ -128,6 +170,6 @@ async def chat_completion(req: ChatRequest, db: AsyncSession = Depends(get_db)):
     await ChatMessageService.create(db, user_msg)
 
     return StreamingResponse(
-        _sse_stream_with_persistence(req, conversation_id),
+        _sse_stream_with_persistence(req, conversation_id, user.id),
         media_type="text/event-stream",
     )

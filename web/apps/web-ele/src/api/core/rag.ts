@@ -7,6 +7,7 @@ export interface KnowledgeBase {
   name: string;
   description?: string;
   kb_type: string;
+  is_public: boolean;
   file_count: number;
   sys_create_datetime: string;
   sys_update_datetime: string;
@@ -119,13 +120,28 @@ export async function getKnowledgeBaseDetailApi(kbId: string) {
 export async function createKnowledgeBaseApi(data: {
   name: string;
   description?: string;
+  is_public?: boolean;
+  permissions?: {
+    role_ids?: string[];
+    dept_ids?: string[];
+    user_ids?: string[];
+  };
 }) {
   return requestClient.post<KnowledgeBase>('/rag/api/knowledge-base', data);
 }
 
 export async function updateKnowledgeBaseApi(
   kbId: string,
-  data: { name?: string; description?: string },
+  data: {
+    name?: string;
+    description?: string;
+    is_public?: boolean;
+    permissions?: {
+      role_ids?: string[];
+      dept_ids?: string[];
+      user_ids?: string[];
+    };
+  },
 ) {
   return requestClient.put<KnowledgeBase>(
     `/rag/api/knowledge-base/${kbId}`,
@@ -417,7 +433,6 @@ export async function setIRCoTEnabledApi(enable: boolean) {
 
 // ─── Chat / Conversation API ───
 export async function createConversationApi(data: {
-  user_id: string;
   title?: string;
   model_name?: string;
 }) {
@@ -428,7 +443,6 @@ export async function createConversationApi(data: {
 }
 
 export async function getUserConversationsApi(
-  userId: string,
   page?: number,
   pageSize?: number,
 ) {
@@ -436,7 +450,7 @@ export async function getUserConversationsApi(
   if (page) params.page = page;
   if (pageSize) params.pageSize = pageSize;
   return requestClient.get<ChatConversation[]>(
-    `/rag/chat/conversations/${userId}`,
+    '/rag/chat/conversations',
     { params },
   );
 }
@@ -565,6 +579,12 @@ export async function updateGraphEdgeApi(
 }
 
 // ─── KB Permission Management ───
+export async function getRolesApi() {
+  return requestClient.get<{ id: string; name: string; code: string }[]>(
+    '/rag/api/knowledge-base/roles',
+  );
+}
+
 export async function getRoleKbPermissionsApi(roleId: string) {
   return requestClient.get<KnowledgeBaseListResult>(
     `/rag/api/knowledge-base/role/${roleId}/kb-permissions`,
@@ -578,6 +598,80 @@ export async function updateRoleKbPermissionsApi(
   return requestClient.put(
     `/rag/api/knowledge-base/role/${roleId}/kb-permissions`,
     { kb_ids: kbIds },
+  );
+}
+
+// ─── Department APIs (for permission selector) ───
+export async function getDepartmentsApi() {
+  return requestClient.get<{ id: string; name: string }[]>(
+    '/rag/api/knowledge-base/departments',
+  );
+}
+
+export async function getDeptKbPermissionsApi(deptId: string) {
+  return requestClient.get<KnowledgeBaseListResult>(
+    `/rag/api/knowledge-base/dept/${deptId}/kb-permissions`,
+  );
+}
+
+export async function updateDeptKbPermissionsApi(
+  deptId: string,
+  kbIds: string[],
+) {
+  return requestClient.put(
+    `/rag/api/knowledge-base/dept/${deptId}/kb-permissions`,
+    { kb_ids: kbIds },
+  );
+}
+
+// ─── User APIs (for permission selector) ───
+export async function getUsersApi(name?: string) {
+  const params: Record<string, any> = {};
+  if (name) params.name = name;
+  return requestClient.get<{ id: string; name: string; username: string }[]>(
+    '/rag/api/knowledge-base/users',
+    { params },
+  );
+}
+
+export async function getUserKbPermissionsApi(userId: string) {
+  return requestClient.get<KnowledgeBaseListResult>(
+    `/rag/api/knowledge-base/user/${userId}/kb-permissions`,
+  );
+}
+
+export async function updateUserKbPermissionsApi(
+  userId: string,
+  kbIds: string[],
+) {
+  return requestClient.put(
+    `/rag/api/knowledge-base/user/${userId}/kb-permissions`,
+    { kb_ids: kbIds },
+  );
+}
+
+// ─── KB-centric Permission APIs ───
+export async function getKbPermissionsApi(kbId: string) {
+  return requestClient.get<{
+    role_ids: string[];
+    dept_ids: string[];
+    user_ids: string[];
+    is_public: boolean;
+  }>(`/rag/api/knowledge-base/${kbId}/permissions`);
+}
+
+export async function updateKbPermissionsApi(
+  kbId: string,
+  data: {
+    role_ids?: string[];
+    dept_ids?: string[];
+    user_ids?: string[];
+    is_public?: boolean;
+  },
+) {
+  return requestClient.put(
+    `/rag/api/knowledge-base/${kbId}/permissions`,
+    data,
   );
 }
 

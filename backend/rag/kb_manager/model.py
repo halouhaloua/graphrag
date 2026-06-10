@@ -9,6 +9,7 @@ class KnowledgeBase(BaseModel):
     name = Column(String(200), unique=True, nullable=False, comment="知识库名称")
     description = Column(Text, nullable=True, comment="描述")
     kb_type = Column(String(20), default="user", comment="类型: user/demo")
+    is_public = Column(Boolean, default=False, comment="全员可见")
 
 
 class KnowledgeBaseFile(BaseModel):
@@ -49,4 +50,50 @@ class KnowledgeBaseRole(BaseModel):
 
     __table_args__ = (
         UniqueConstraint("role_id", "kb_id", name="uq_role_kb"),
+    )
+
+
+class KnowledgeBaseDept(BaseModel):
+    __tablename__ = "rag_knowledge_base_dept"
+
+    dept_id = Column(
+        String(21),
+        ForeignKey("core_dept.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="部门ID",
+    )
+    kb_id = Column(
+        String(21),
+        ForeignKey("rag_knowledge_base.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="知识库ID",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("dept_id", "kb_id", name="uq_dept_kb"),
+    )
+
+
+class KnowledgeBaseUser(BaseModel):
+    __tablename__ = "rag_knowledge_base_user"
+
+    user_id = Column(
+        String(21),
+        ForeignKey("core_user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="用户ID",
+    )
+    kb_id = Column(
+        String(21),
+        ForeignKey("rag_knowledge_base.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="知识库ID",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "kb_id", name="uq_user_kb"),
     )

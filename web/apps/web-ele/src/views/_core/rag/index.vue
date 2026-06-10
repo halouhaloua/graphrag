@@ -90,7 +90,16 @@ function onView(row: KnowledgeBase) {
   router.push(`/rag/knowledge-base/${row.id}`);
 }
 
-async function handleSave(data: { name: string; description?: string }, editId?: string) {
+async function handleSave(data: {
+  name: string;
+  description?: string;
+  is_public?: boolean;
+  permissions?: {
+    role_ids: string[];
+    dept_ids: string[];
+    user_ids: string[];
+  },
+}, editId?: string) {
   if (editId) {
     await updateKnowledgeBaseApi(editId, data);
     ElMessage.success('更新成功');

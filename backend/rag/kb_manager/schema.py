@@ -1,21 +1,47 @@
 import warnings
-from typing import List, Optional
+from typing import Any, List, Optional
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 warnings.filterwarnings("ignore", message="Field name \"schema_json\" in \"KnowledgeBaseFile.*")
+
+
+# ─── 角色/部门/用户基础信息 ───
+class KBPermissionAssignments(BaseModel):
+    role_ids: list[str] = []
+    dept_ids: list[str] = []
+    user_ids: list[str] = []
+
+
+class DeptInfo(BaseModel):
+    id: str
+    name: str
+
+    model_config = {"from_attributes": True}
+
+
+class UserInfoSimple(BaseModel):
+    id: str
+    name: str
+    username: str
+
+    model_config = {"from_attributes": True}
 
 
 # ─── 知识库 ───
 class KnowledgeBaseCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200, description="知识库名称")
     description: Optional[str] = Field(None, description="描述")
+    is_public: bool = Field(False, description="全员可见")
+    permissions: Optional[KBPermissionAssignments] = Field(None, description="创建时分配的权限")
 
 
 class KnowledgeBaseUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=200, description="知识库名称")
     description: Optional[str] = Field(None, description="描述")
+    is_public: Optional[bool] = Field(None, description="全员可见")
+    permissions: Optional[KBPermissionAssignments] = Field(None, description="更新的权限")
 
 
 class KnowledgeBaseResponse(BaseModel):
@@ -23,11 +49,17 @@ class KnowledgeBaseResponse(BaseModel):
     name: str
     description: Optional[str] = None
     kb_type: str = "user"
+    is_public: bool = False
     file_count: int = 0
     sys_create_datetime: Optional[datetime] = None
     sys_update_datetime: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+
+    @field_validator("is_public", mode="before")
+    @classmethod
+    def coerce_is_public(cls, v: Any) -> bool:
+        return False if v is None else v
 
 
 class KnowledgeBaseListResponse(BaseModel):
@@ -103,6 +135,21 @@ class KBPermissionUpdateRequest(BaseModel):
 
 class KBAccessCheckResponse(BaseModel):
     has_access: bool
+
+
+class KBPermissionDetailsResponse(BaseModel):
+    role_ids: list[str]
+    dept_ids: list[str]
+    user_ids: list[str]
+    is_public: bool = False
+
+
+# ─── 知识库权限修改请求 ───
+class KBPermissionBatchUpdate(BaseModel):
+    role_ids: list[str] = []
+    dept_ids: list[str] = []
+    user_ids: list[str] = []
+    is_public: Optional[bool] = None
 
 
 # ─── KB文件文本编辑 ───

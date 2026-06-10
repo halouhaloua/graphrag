@@ -79,9 +79,7 @@ async function loadFiles(kbId: string) {
 
 async function loadConversations() {
   try {
-    const userId = currentUserId.value;
-    if (!userId) return;
-    const res = await getUserConversationsApi(userId, 1, 50);
+    const res = await getUserConversationsApi(1, 50);
     conversations.value = res;
   } catch {
     conversations.value = [];

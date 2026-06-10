@@ -190,8 +190,28 @@ async def upload_files_to_kb(
     return results
 
 
-# ─── 角色权限 ───
+# ─── 角色/部门/用户权限 ───
 class KnowledgeBasePermissionService:
+
+    @classmethod
+    def _get_role_ids(cls, user) -> _List[str]:
+        """从 user 对象获取所有角色 ID，支持多角色"""
+        from utils.context import get_current_user_info_from_context
+        ctx = get_current_user_info_from_context()
+        if ctx and ctx.get("role_ids"):
+            return ctx["role_ids"]
+        return [user.role_id] if user.role_id else []
+
+    @classmethod
+    def _get_dept_id(cls, user) -> Optional[str]:
+        """从 user 对象获取部门 ID"""
+        from utils.context import get_current_user_info_from_context
+        ctx = get_current_user_info_from_context()
+        if ctx and ctx.get("dept_id"):
+            return ctx["dept_id"]
+        return getattr(user, "dept_id", None)
+
+    # ─── 角色维度 ───
 
     @classmethod
     async def get_role_kb_ids(cls, db: AsyncSession, role_id: str) -> _List[str]:
@@ -215,21 +235,109 @@ class KnowledgeBasePermissionService:
             db.add(KnowledgeBaseRole(role_id=role_id, kb_id=kb_id))
         await db.commit()
 
+    # ─── 部门维度 ───
+
+    @classmethod
+    async def get_dept_kb_ids(cls, db: AsyncSession, dept_id: str) -> _List[str]:
+        from rag.kb_manager.model import KnowledgeBaseDept
+        query = _select(KnowledgeBaseDept.kb_id).where(
+            KnowledgeBaseDept.dept_id == dept_id,
+            KnowledgeBaseDept.is_deleted == False,
+        )
+        result = await db.execute(query)
+        return [row[0] for row in result]
+
+    @classmethod
+    async def set_dept_kbs(
+        cls, db: AsyncSession, dept_id: str, kb_ids: _List[str]
+    ):
+        from rag.kb_manager.model import KnowledgeBaseDept
+        await db.execute(
+            _delete(KnowledgeBaseDept).where(
+                KnowledgeBaseDept.dept_id == dept_id,
+            )
+        )
+        for kb_id in kb_ids:
+            db.add(KnowledgeBaseDept(dept_id=dept_id, kb_id=kb_id))
+        await db.commit()
+
+    # ─── 用户维度 ───
+
+    @classmethod
+    async def get_user_kb_ids(cls, db: AsyncSession, user_id: str) -> _List[str]:
+        from rag.kb_manager.model import KnowledgeBaseUser
+        query = _select(KnowledgeBaseUser.kb_id).where(
+            KnowledgeBaseUser.user_id == user_id,
+            KnowledgeBaseUser.is_deleted == False,
+        )
+        result = await db.execute(query)
+        return [row[0] for row in result]
+
+    @classmethod
+    async def set_user_kbs(
+        cls, db: AsyncSession, user_id: str, kb_ids: _List[str]
+    ):
+        from rag.kb_manager.model import KnowledgeBaseUser
+        await db.execute(
+            _delete(KnowledgeBaseUser).where(
+                KnowledgeBaseUser.user_id == user_id,
+            )
+        )
+        for kb_id in kb_ids:
+            db.add(KnowledgeBaseUser(user_id=user_id, kb_id=kb_id))
+        await db.commit()
+
+    # ─── 检查 / 查询（OR 逻辑：全员可见 OR 角色 OR 部门 OR 用户任一匹配） ───
+
+    @classmethod
+    async def _kb_is_public(cls, db: AsyncSession, kb_id: str) -> bool:
+        """检查知识库是否设置为全员可见"""
+        from rag.kb_manager.model import KnowledgeBase
+        query = _select(KnowledgeBase.is_public).where(
+            KnowledgeBase.id == kb_id,
+            KnowledgeBase.is_deleted == False,
+        )
+        row = (await db.execute(query)).first()
+        return row is not None and row[0] is True
+
     @classmethod
     async def check_kb_access(
         cls, db: AsyncSession, kb_id: str, user
     ) -> bool:
         if user.is_superuser:
             return True
-        if not user.role_id:
-            return False
-        query = _select(KnowledgeBaseRole.id).where(
-            KnowledgeBaseRole.role_id == user.role_id,
-            KnowledgeBaseRole.kb_id == kb_id,
-            KnowledgeBaseRole.is_deleted == False,
+        # 全员可见
+        if await cls._kb_is_public(db, kb_id):
+            return True
+        # 角色维度
+        role_ids = cls._get_role_ids(user)
+        if role_ids:
+            query = _select(KnowledgeBaseRole.id).where(
+                KnowledgeBaseRole.role_id.in_(role_ids),
+                KnowledgeBaseRole.kb_id == kb_id,
+                KnowledgeBaseRole.is_deleted == False,
+            )
+            if (await db.execute(query)).first() is not None:
+                return True
+        # 部门维度
+        dept_id = cls._get_dept_id(user)
+        if dept_id:
+            from rag.kb_manager.model import KnowledgeBaseDept
+            query = _select(KnowledgeBaseDept.id).where(
+                KnowledgeBaseDept.dept_id == dept_id,
+                KnowledgeBaseDept.kb_id == kb_id,
+                KnowledgeBaseDept.is_deleted == False,
+            )
+            if (await db.execute(query)).first() is not None:
+                return True
+        # 用户维度
+        from rag.kb_manager.model import KnowledgeBaseUser
+        query = _select(KnowledgeBaseUser.id).where(
+            KnowledgeBaseUser.user_id == user.id,
+            KnowledgeBaseUser.kb_id == kb_id,
+            KnowledgeBaseUser.is_deleted == False,
         )
-        result = await db.execute(query)
-        return result.first() is not None
+        return (await db.execute(query)).first() is not None
 
     @classmethod
     async def get_user_visible_kb_ids(
@@ -237,6 +345,116 @@ class KnowledgeBasePermissionService:
     ) -> Optional[_List[str]]:
         if user.is_superuser:
             return None
-        if not user.role_id:
-            return []
-        return await cls.get_role_kb_ids(db, user.role_id)
+        visible: set[str] = set()
+        # 全员可见
+        from rag.kb_manager.model import KnowledgeBase
+        query = _select(KnowledgeBase.id).where(
+            KnowledgeBase.is_public == True,
+            KnowledgeBase.is_deleted == False,
+        )
+        for row in (await db.execute(query)):
+            visible.add(row[0])
+        # 角色维度
+        role_ids = cls._get_role_ids(user)
+        if role_ids:
+            query = _select(KnowledgeBaseRole.kb_id).where(
+                KnowledgeBaseRole.role_id.in_(role_ids),
+                KnowledgeBaseRole.is_deleted == False,
+            )
+            for row in (await db.execute(query)):
+                visible.add(row[0])
+        # 部门维度
+        dept_id = cls._get_dept_id(user)
+        if dept_id:
+            from rag.kb_manager.model import KnowledgeBaseDept
+            query = _select(KnowledgeBaseDept.kb_id).where(
+                KnowledgeBaseDept.dept_id == dept_id,
+                KnowledgeBaseDept.is_deleted == False,
+            )
+            for row in (await db.execute(query)):
+                visible.add(row[0])
+        # 用户维度
+        from rag.kb_manager.model import KnowledgeBaseUser
+        query = _select(KnowledgeBaseUser.kb_id).where(
+            KnowledgeBaseUser.user_id == user.id,
+            KnowledgeBaseUser.is_deleted == False,
+        )
+        for row in (await db.execute(query)):
+            visible.add(row[0])
+        return list(visible)
+
+    # ─── 批量设置 KB 的所有权限 ───
+
+    @classmethod
+    async def set_kb_permissions(
+        cls, db: AsyncSession, kb_id: str,
+        role_ids: Optional[_List[str]] = None,
+        dept_ids: Optional[_List[str]] = None,
+        user_ids: Optional[_List[str]] = None,
+        auto_commit: bool = True,
+    ):
+        from rag.kb_manager.model import KnowledgeBaseDept, KnowledgeBaseUser
+        if role_ids is not None:
+            await db.execute(
+                _delete(KnowledgeBaseRole).where(
+                    KnowledgeBaseRole.kb_id == kb_id,
+                )
+            )
+            for rid in role_ids:
+                db.add(KnowledgeBaseRole(role_id=rid, kb_id=kb_id))
+        if dept_ids is not None:
+            await db.execute(
+                _delete(KnowledgeBaseDept).where(
+                    KnowledgeBaseDept.kb_id == kb_id,
+                )
+            )
+            for did in dept_ids:
+                db.add(KnowledgeBaseDept(dept_id=did, kb_id=kb_id))
+        if user_ids is not None:
+            await db.execute(
+                _delete(KnowledgeBaseUser).where(
+                    KnowledgeBaseUser.kb_id == kb_id,
+                )
+            )
+            for uid in user_ids:
+                db.add(KnowledgeBaseUser(user_id=uid, kb_id=kb_id))
+        if auto_commit:
+            await db.commit()
+
+    @classmethod
+    async def get_kb_permissions(
+        cls, db: AsyncSession, kb_id: str
+    ) -> dict:
+        from rag.kb_manager.model import KnowledgeBaseDept, KnowledgeBaseUser
+        # 全员可见
+        is_public = await cls._kb_is_public(db, kb_id)
+        # 角色
+        result = await db.execute(
+            _select(KnowledgeBaseRole.role_id).where(
+                KnowledgeBaseRole.kb_id == kb_id,
+                KnowledgeBaseRole.is_deleted == False,
+            )
+        )
+        role_ids = [row[0] for row in result]
+        # 部门
+        result = await db.execute(
+            _select(KnowledgeBaseDept.dept_id).where(
+                KnowledgeBaseDept.kb_id == kb_id,
+                KnowledgeBaseDept.is_deleted == False,
+            )
+        )
+        dept_ids = [row[0] for row in result]
+        # 用户
+        result = await db.execute(
+            _select(KnowledgeBaseUser.user_id).where(
+                KnowledgeBaseUser.kb_id == kb_id,
+                KnowledgeBaseUser.is_deleted == False,
+            )
+        )
+        user_ids = [row[0] for row in result]
+        return {
+            "role_ids": role_ids,
+            "dept_ids": dept_ids,
+            "user_ids": user_ids,
+            "is_public": is_public,
+        }

@@ -30,7 +30,11 @@ from rag.kb_manager.schema import (
     FileUploadResponseWrapper,
     DeleteResponse,
     RoleInfo,
+    DeptInfo,
+    UserInfoSimple,
     KBPermissionUpdateRequest,
+    KBPermissionBatchUpdate,
+    KBPermissionDetailsResponse,
     KBAccessCheckResponse,
     KbFileTextContent,
     KbFileTextUpdate,
@@ -71,7 +75,19 @@ async def create_knowledge_base(
     existing = await KnowledgeBaseService.get_by_field(db, field="name", value=data.name)
     if existing:
         raise HTTPException(status_code=400, detail="知识库名称已存在")
-    return await KnowledgeBaseService.create(db, data)
+    kb = await KnowledgeBaseService.create(db, data)
+    # 自动授予创建者访问权限
+    from rag.kb_manager.model import KnowledgeBaseUser
+    db.add(KnowledgeBaseUser(user_id=user.id, kb_id=kb.id))
+    if data.permissions:
+        await KnowledgeBasePermissionService.set_kb_permissions(
+            db, kb.id,
+            role_ids=data.permissions.role_ids,
+            dept_ids=data.permissions.dept_ids,
+            user_ids=data.permissions.user_ids,
+        )
+    await db.commit()
+    return kb
 
 
 @router.get("/knowledge-bases", response_model=KnowledgeBaseListResponse, summary="知识库列表")
@@ -150,9 +166,20 @@ async def update_knowledge_base(
         existing = await KnowledgeBaseService.get_by_field(db, field="name", value=data.name)
         if existing and existing.id != kb_id:
             raise HTTPException(status_code=400, detail="知识库名称已存在")
-    result = await KnowledgeBaseService.update(db, record_id=kb_id, data=data)
+    # 分离 permissions 字段，先更新基本信息
+    permissions_data = data.permissions
+    update_data = data.model_copy(update={"permissions": None})
+    result = await KnowledgeBaseService.update(db, record_id=kb_id, data=update_data)
     if not result:
         raise HTTPException(status_code=404, detail="知识库不存在")
+    # 更新权限
+    if permissions_data is not None:
+        await KnowledgeBasePermissionService.set_kb_permissions(
+            db, kb_id,
+            role_ids=permissions_data.role_ids,
+            dept_ids=permissions_data.dept_ids,
+            user_ids=permissions_data.user_ids,
+        )
     return result
 
 
@@ -406,7 +433,10 @@ async def update_kb_file_text(
     response_model=List[RoleInfo],
     summary="获取所有角色（用于KB权限分配）",
 )
-async def list_roles_for_permission(db: AsyncSession = Depends(get_db)):
+async def list_roles_for_permission(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     from core.role.model import Role as RoleModel
     query = select(RoleModel).where(
         RoleModel.is_deleted == False,
@@ -465,6 +495,17 @@ async def update_role_kb_permissions(
 ):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="仅超级管理员可管理知识库权限")
+    if data.kb_ids:
+        result = await db.execute(
+            select(KnowledgeBaseService.model.id).where(
+                KnowledgeBaseService.model.id.in_(data.kb_ids),
+                KnowledgeBaseService.model.is_deleted == False,
+            )
+        )
+        existing_ids = {row[0] for row in result}
+        invalid_ids = set(data.kb_ids) - existing_ids
+        if invalid_ids:
+            raise HTTPException(status_code=400, detail=f"知识库不存在: {', '.join(invalid_ids)}")
     await KnowledgeBasePermissionService.set_role_kbs(db, role_id, data.kb_ids)
     return {"msg": "权限更新成功"}
 
@@ -483,3 +524,218 @@ async def check_kb_access(
         db, kb_id, current_user
     )
     return KBAccessCheckResponse(has_access=has_access)
+
+
+# ─── 部门列表（用于权限分配选择器） ───
+
+
+@perm_router.get(
+    "/departments",
+    response_model=List[DeptInfo],
+    summary="获取所有部门（用于KB权限分配）",
+)
+async def list_departments_for_permission(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from core.dept.model import Dept
+    query = select(Dept).where(
+        Dept.is_deleted == False,
+        Dept.status == True,
+    ).order_by(Dept.level, Dept.name)
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+# ─── 用户搜索（用于权限分配选择器） ───
+
+
+@perm_router.get(
+    "/users",
+    response_model=List[UserInfoSimple],
+    summary="搜索用户（用于KB权限分配）",
+)
+async def list_users_for_permission(
+    name: str = Query(default=None, description="用户名/真实姓名搜索"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from core.user.model import User
+    query = select(User).where(
+        User.is_deleted == False,
+        User.user_status == 1,
+    )
+    if name:
+        query = query.where(
+            (User.username.ilike(f"%{name}%")) | (User.name.ilike(f"%{name}%"))
+        )
+    query = query.order_by(User.name).limit(200)
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+# ─── 部门 KB 权限管理 ───
+
+
+@perm_router.get(
+    "/dept/{dept_id}/kb-permissions",
+    response_model=KnowledgeBaseListResponse,
+    summary="获取部门已分配的知识库列表",
+)
+async def get_dept_kb_permissions(
+    dept_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    kb_ids = await KnowledgeBasePermissionService.get_dept_kb_ids(db, dept_id)
+    if not kb_ids:
+        return KnowledgeBaseListResponse(items=[], total=0)
+    query = (
+        select(KnowledgeBaseService.model)
+        .where(
+            KnowledgeBaseService.model.id.in_(kb_ids),
+            KnowledgeBaseService.model.is_deleted == False,
+        )
+    )
+    result = await db.execute(query)
+    items = list(result.scalars().all())
+    for item in items:
+        cnt = await db.execute(
+            select(sa_func.count(KnowledgeBaseFile.id))
+            .where(KnowledgeBaseFile.kb_id == item.id, KnowledgeBaseFile.is_deleted == False)
+        )
+        item.file_count = cnt.scalar() or 0
+    return KnowledgeBaseListResponse(items=items, total=len(items))
+
+
+@perm_router.put(
+    "/dept/{dept_id}/kb-permissions",
+    summary="更新部门的知识库权限",
+)
+async def update_dept_kb_permissions(
+    dept_id: str,
+    data: KBPermissionUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="仅超级管理员可管理知识库权限")
+    if data.kb_ids:
+        result = await db.execute(
+            select(KnowledgeBaseService.model.id).where(
+                KnowledgeBaseService.model.id.in_(data.kb_ids),
+                KnowledgeBaseService.model.is_deleted == False,
+            )
+        )
+        existing_ids = {row[0] for row in result}
+        invalid_ids = set(data.kb_ids) - existing_ids
+        if invalid_ids:
+            raise HTTPException(status_code=400, detail=f"知识库不存在: {', '.join(invalid_ids)}")
+    await KnowledgeBasePermissionService.set_dept_kbs(db, dept_id, data.kb_ids)
+    return {"msg": "权限更新成功"}
+
+
+# ─── 用户 KB 权限管理 ───
+
+
+@perm_router.get(
+    "/user/{user_id}/kb-permissions",
+    response_model=KnowledgeBaseListResponse,
+    summary="获取用户已分配的知识库列表",
+)
+async def get_user_kb_permissions(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    kb_ids = await KnowledgeBasePermissionService.get_user_kb_ids(db, user_id)
+    if not kb_ids:
+        return KnowledgeBaseListResponse(items=[], total=0)
+    query = (
+        select(KnowledgeBaseService.model)
+        .where(
+            KnowledgeBaseService.model.id.in_(kb_ids),
+            KnowledgeBaseService.model.is_deleted == False,
+        )
+    )
+    result = await db.execute(query)
+    items = list(result.scalars().all())
+    for item in items:
+        cnt = await db.execute(
+            select(sa_func.count(KnowledgeBaseFile.id))
+            .where(KnowledgeBaseFile.kb_id == item.id, KnowledgeBaseFile.is_deleted == False)
+        )
+        item.file_count = cnt.scalar() or 0
+    return KnowledgeBaseListResponse(items=items, total=len(items))
+
+
+@perm_router.put(
+    "/user/{user_id}/kb-permissions",
+    summary="更新用户的知识库权限",
+)
+async def update_user_kb_permissions(
+    user_id: str,
+    data: KBPermissionUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="仅超级管理员可管理知识库权限")
+    if data.kb_ids:
+        result = await db.execute(
+            select(KnowledgeBaseService.model.id).where(
+                KnowledgeBaseService.model.id.in_(data.kb_ids),
+                KnowledgeBaseService.model.is_deleted == False,
+            )
+        )
+        existing_ids = {row[0] for row in result}
+        invalid_ids = set(data.kb_ids) - existing_ids
+        if invalid_ids:
+            raise HTTPException(status_code=400, detail=f"知识库不存在: {', '.join(invalid_ids)}")
+    await KnowledgeBasePermissionService.set_user_kbs(db, user_id, data.kb_ids)
+    return {"msg": "权限更新成功"}
+
+
+# ─── KB 维度权限查询与修改 ───
+
+
+@perm_router.get(
+    "/{kb_id}/permissions",
+    response_model=KBPermissionDetailsResponse,
+    summary="获取知识库的所有权限配置",
+)
+async def get_kb_permissions(
+    kb_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not await KnowledgeBasePermissionService.check_kb_access(db, kb_id, current_user):
+        raise HTTPException(status_code=403, detail="无权访问该知识库")
+    return await KnowledgeBasePermissionService.get_kb_permissions(db, kb_id)
+
+
+@perm_router.put(
+    "/{kb_id}/permissions",
+    response_model=KBPermissionDetailsResponse,
+    summary="批量更新知识库的权限配置",
+)
+async def update_kb_permissions(
+    kb_id: str,
+    data: KBPermissionBatchUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="仅超级管理员可管理知识库权限")
+    kb = await KnowledgeBaseService.get_by_id(db, kb_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    if data.is_public is not None:
+        kb.is_public = data.is_public
+    await KnowledgeBasePermissionService.set_kb_permissions(
+        db, kb_id,
+        role_ids=data.role_ids,
+        dept_ids=data.dept_ids,
+        user_ids=data.user_ids,
+        auto_commit=False,
+    )
+    await db.commit()
+    return await KnowledgeBasePermissionService.get_kb_permissions(db, kb_id)
