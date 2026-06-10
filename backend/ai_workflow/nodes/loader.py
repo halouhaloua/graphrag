@@ -17,24 +17,17 @@ def load_all_nodes():
         return
     _loaded = True
 
-    from ai_workflow.nodes import (
-        api_call,
-        arxiv_search,
-        browser_agent,
-        chat,
-        python_execute,
-        serper_scrape,
-        serper_search,
-        weather_forecast,
-    )
+    import ai_workflow.nodes.api_call  # noqa: F401
+    import ai_workflow.nodes.arxiv_search  # noqa: F401
+    import ai_workflow.nodes.browser_agent  # noqa: F401
+    import ai_workflow.nodes.chat  # noqa: F401
+    import ai_workflow.nodes.python_execute  # noqa: F401
+    import ai_workflow.nodes.serper_scrape  # noqa: F401
+    import ai_workflow.nodes.serper_search  # noqa: F401
+    import ai_workflow.nodes.weather_forecast  # noqa: F401
 
-    _ = (
-        api_call,
-        arxiv_search,
-        browser_agent,
-        chat,
-        python_execute,
-        serper_scrape,
-        serper_search,
-        weather_forecast,
-    )
+
+def reset_loaded():
+    """重置加载状态（用于测试）"""
+    global _loaded
+    _loaded = False

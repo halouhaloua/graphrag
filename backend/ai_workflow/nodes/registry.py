@@ -34,29 +34,30 @@ class NodeRegistry:
 
     @classmethod
     def get(cls, node_type: str) -> Optional[Type[BaseNode]]:
-        """根据类型获取节点类"""
         return _node_registry.get(node_type)
 
     @classmethod
     def get_all_types(cls) -> list[str]:
-        """获取所有已注册的节点类型列表"""
         return list(_node_registry.keys())
 
     @classmethod
     def get_metadata(cls, node_type: str) -> Optional[dict]:
-        """获取节点类型的元数据"""
         return _node_metadata.get(node_type)
 
     @classmethod
     def get_all_metadata(cls) -> list[dict]:
-        """获取所有节点的元数据列表"""
         return list(_node_metadata.values())
 
     @classmethod
     def register(
         cls, node_type: str, node_class: Type[BaseNode], metadata: Optional[dict] = None
     ):
-        """直接注册节点类型（非装饰器方式）"""
         _node_registry[node_type] = node_class
         if metadata:
             _node_metadata[node_type] = metadata
+
+    @classmethod
+    def reset(cls):
+        """重置注册状态（用于测试隔离）"""
+        _node_registry.clear()
+        _node_metadata.clear()

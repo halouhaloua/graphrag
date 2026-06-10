@@ -34,15 +34,19 @@ def _sse(data: dict) -> str:
 
 
 def _serialize_nodes(nodes: list) -> str:
+    from pydantic import BaseModel
+
     return json.dumps(
-        [n.model_dump() if hasattr(n, "model_dump") else n for n in nodes],
+        [n.model_dump() if isinstance(n, BaseModel) else n for n in nodes],
         ensure_ascii=False,
     )
 
 
 def _serialize_edges(edges: list) -> str:
+    from pydantic import BaseModel
+
     return json.dumps(
-        [e.model_dump() if hasattr(e, "model_dump") else e for e in edges],
+        [e.model_dump() if isinstance(e, BaseModel) else e for e in edges],
         ensure_ascii=False,
     )
 
@@ -154,12 +158,33 @@ async def update_workflow_def(
 
     update_data = data.model_dump(exclude_unset=True)
 
+    if "nodes" in update_data or "edges" in update_data:
+        nodes_for_check = (
+            json.loads(
+                _serialize_nodes(update_data["nodes"])
+                if "nodes" in update_data
+                else wf_def.nodes
+            )
+            if "nodes" in update_data
+            else json.loads(wf_def.nodes)
+        )
+        edges_for_check = (
+            json.loads(
+                _serialize_edges(update_data["edges"])
+                if "edges" in update_data
+                else wf_def.edges
+            )
+            if "edges" in update_data
+            else json.loads(wf_def.edges)
+        )
+        ok, err, _ = WorkflowEngine.validate_dag(nodes_for_check, edges_for_check)
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"更新后工作流无效: {err}")
+
     if "nodes" in update_data:
-        nodes_list = update_data["nodes"]
-        update_data["nodes"] = _serialize_nodes(nodes_list)
+        update_data["nodes"] = _serialize_nodes(update_data["nodes"])
     if "edges" in update_data:
-        edges_list = update_data["edges"]
-        update_data["edges"] = _serialize_edges(edges_list)
+        update_data["edges"] = _serialize_edges(update_data["edges"])
     if "global_params" in update_data:
         val = update_data["global_params"]
         update_data["global_params"] = (
@@ -341,6 +366,7 @@ async def stream_instance(
             task = asyncio.create_task(
                 WorkflowEngine.execute_instance(inst_id, exec_db, stream_queue=queue)
             )
+            WorkflowEngine.register_running_task(inst_id, task)
             try:
                 while True:
                     event = await queue.get()
@@ -355,6 +381,7 @@ async def stream_instance(
             except Exception as e:
                 yield _sse({"event": "error", "data": str(e)})
             finally:
+                WorkflowEngine.cancel_running_task(inst_id)
                 if not task.done():
                     task.cancel()
         yield "data: [DONE]\n\n"
@@ -379,6 +406,7 @@ async def cancel_instance(
     inst.status = "cancelled"
     inst.finished_at = datetime.now()
     await db.commit()
+    WorkflowEngine.cancel_running_task(inst_id)
     return {"message": "已取消", "status": "cancelled"}
 
 

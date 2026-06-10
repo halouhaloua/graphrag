@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 _REF_PATTERN = re.compile(r"\$\{(\w+)\.(\w+)\}")
 
+_running_tasks: dict[str, asyncio.Task] = {}
+
 
 class WorkflowEngine:
     """基于 DAG 的工作流执行引擎
@@ -28,13 +30,24 @@ class WorkflowEngine:
 
     .. code-block:: python
 
-        # 使用示例
         engine = WorkflowEngine()
         ok, err, levels = engine.validate_dag(nodes, edges)
         if ok:
             inst = await engine.create_instance(def_id, {}, user_id, db)
             await engine.execute_instance(inst.id, db)
     """
+
+    # ── 运行中任务注册 ────────────────────────────────
+
+    @staticmethod
+    def register_running_task(instance_id: str, task: asyncio.Task):
+        _running_tasks[instance_id] = task
+
+    @staticmethod
+    def cancel_running_task(instance_id: str):
+        task = _running_tasks.pop(instance_id, None)
+        if task and not task.done():
+            task.cancel()
 
     # ── 拓扑排序 ──────────────────────────────────────
 
@@ -197,18 +210,18 @@ class WorkflowEngine:
     ):
         """执行工作流实例
 
-        按拓扑排序结果逐层执行节点，同层节点并行运行。
+        按拓扑排序结果逐层执行节点，同层节点使用独立 DB session 并行运行。
         支持通过 ``stream_queue`` 推送 SSE 事件。
 
         Args:
             instance_id (`str`):
                 工作流实例 ID
             db (`AsyncSession`):
-                数据库会话
+                数据库会话（用于实例状态更新）
             stream_queue (`asyncio.Queue | None`, optional):
                 用于推送 SSE 事件的异步队列
         """
-        from app.config import settings  # 延迟导入，避免循环依赖
+        from app.config import settings
 
         instance = await db.get(WorkflowInstance, instance_id)
         if not instance:
@@ -253,98 +266,91 @@ class WorkflowEngine:
         node_outputs: dict[str, dict] = {}
         cancel = False
 
-        for level in levels:
-            if cancel:
-                for nid in level:
-                    await WorkflowEngine._log_cancelled_node(
+        try:
+            for level in levels:
+                if cancel:
+                    for nid in level:
+                        await WorkflowEngine._log_cancelled_node(nid, instance_id)
+                    continue
+
+                tasks = [
+                    WorkflowEngine._execute_single_node(
                         nid,
+                        node_map[nid],
                         instance_id,
-                        db,
+                        node_outputs,
+                        stream_queue,
+                        settings,
                     )
-                continue
+                    for nid in level
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            tasks = [
-                WorkflowEngine._execute_single_node(
-                    nid,
-                    node_map[nid],
-                    instance_id,
-                    db,
-                    node_outputs,
-                    stream_queue,
-                    settings,
-                )
-                for nid in level
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+                for nid, res in zip(level, results):
+                    if isinstance(res, Exception):
+                        node_outputs[nid] = {"error": str(res), "success": False}
+                        error_mode = node_map[nid].get("error_mode", "stop")
+                        if error_mode == "stop":
+                            cancel = True
+                            instance.status = "failed"
+                            instance.error = f"节点 {nid} 执行失败: {res}"
+                    elif isinstance(res, dict):
+                        node_outputs[nid] = res
 
-            for nid, res in zip(level, results):
-                if isinstance(res, Exception):
-                    node_outputs[nid] = {"error": str(res), "success": False}
-                    error_mode = node_map[nid].get("error_mode", "stop")
-                    if error_mode == "stop":
-                        cancel = True
-                        instance.status = "failed"
-                        instance.error = f"节点 {nid} 执行失败: {res}"
-                elif isinstance(res, dict):
-                    node_outputs[nid] = res
+            if instance.status != "failed":
+                instance.status = "completed"
 
-        if instance.status != "failed":
-            instance.status = "completed"
-        instance.finished_at = datetime.now()
-        instance.output_result = json.dumps(
-            {k: v.get("result", v) for k, v in node_outputs.items()},
-            ensure_ascii=False,
-        )
-        await db.commit()
+        except Exception as e:
+            instance.status = "failed"
+            instance.error = str(e)
+            raise
+
+        finally:
+            if instance.status == "running":
+                instance.status = "failed"
+                instance.error = "执行异常终止"
+            instance.finished_at = datetime.now()
+            instance.output_result = json.dumps(
+                {k: v.get("result", v) for k, v in node_outputs.items()},
+                ensure_ascii=False,
+            )
+            await db.commit()
 
         if instance.status == "failed":
             await WorkflowEngine._push_event(
                 stream_queue,
                 WorkflowEventType.WORKFLOW_ERROR,
-                {
-                    "instance_id": instance_id,
-                    "error": instance.error,
-                },
+                {"instance_id": instance_id, "error": instance.error},
             )
         else:
             await WorkflowEngine._push_event(
                 stream_queue,
                 WorkflowEventType.WORKFLOW_COMPLETE,
-                {
-                    "instance_id": instance_id,
-                    "status": instance.status,
-                },
+                {"instance_id": instance_id, "status": instance.status},
             )
 
-    # ── 单节点执行 ────────────────────────────────────
+    # ── 单节点执行（独立 DB session）──────────────────
 
     @staticmethod
     async def _execute_single_node(
         node_id: str,
         node_def: dict,
         instance_id: str,
-        db: AsyncSession,
         node_outputs: dict[str, dict],
         stream_queue: Optional[asyncio.Queue],
         settings: Any,
     ) -> dict:
-        """执行单个工作流节点
+        """执行单个工作流节点（使用独立 DB session）
+
+        每个节点执行时创建独立的 ``AsyncSession``，避免同层并发时的 session 竞争。
 
         Args:
-            node_id (`str`):
-                节点 ID
-            node_def (`dict`):
-                节点定义
-            instance_id (`str`):
-                工作流实例 ID
-            db (`AsyncSession`):
-                数据库会话
-            node_outputs (`dict[str, dict]`):
-                已完成节点的输出
-            stream_queue (`asyncio.Queue | None`):
-                SSE 事件推送队列
-            settings (`Any`):
-                应用配置对象
+            node_id (`str`): 节点 ID
+            node_def (`dict`): 节点定义
+            instance_id (`str`): 工作流实例 ID
+            node_outputs (`dict[str, dict]`): 已完成节点的输出
+            stream_queue (`asyncio.Queue | None`): SSE 事件推送队列
+            settings (`Any`): 应用配置对象
 
         Returns:
             `dict`: 节点执行结果
@@ -361,104 +367,97 @@ class WorkflowEngine:
         if not node_cls:
             raise ValueError(f"未知节点类型: {node_type}")
 
-        node_log = WorkflowNodeLog(
-            instance_id=instance_id,
-            node_id=node_id,
-            node_type=node_type,
-            status="running",
-            input_data=json.dumps(resolved_params, ensure_ascii=False),
-            started_at=datetime.now(),
-        )
-        db.add(node_log)
-        await db.commit()
-        await db.refresh(node_log)
+        node_timeout = float(node_def.get("params", {}).get("_timeout", 3600))
 
-        await WorkflowEngine._push_event(
-            stream_queue,
-            WorkflowEventType.NODE_START,
-            {
-                "node_id": node_id,
-                "node_type": node_type,
-            },
-        )
-
-        start = time.time()
-        try:
-            node: BaseNode = node_cls()
-            context = NodeContext(
-                db=db,
-                settings=settings,
-                logger=logger,
-                node_id=node_id,
+        async with _async_session() as task_db:
+            node_log = WorkflowNodeLog(
                 instance_id=instance_id,
-                stream_queue=stream_queue,
+                node_id=node_id,
+                node_type=node_type,
+                status="running",
+                input_data=json.dumps(resolved_params, ensure_ascii=False),
+                started_at=datetime.now(),
             )
-            result = await node.execute(resolved_params, context)
-
-            duration = int((time.time() - start) * 1000)
-            node_log.status = "completed"
-            node_log.output_data = json.dumps(result, ensure_ascii=False)
-            node_log.duration_ms = duration
-            node_log.finished_at = datetime.now()
-            await db.commit()
+            task_db.add(node_log)
+            await task_db.commit()
+            await task_db.refresh(node_log)
 
             await WorkflowEngine._push_event(
                 stream_queue,
-                WorkflowEventType.NODE_COMPLETE,
-                {
-                    "node_id": node_id,
-                    "duration_ms": duration,
-                },
+                WorkflowEventType.NODE_START,
+                {"node_id": node_id, "node_type": node_type},
             )
-            return result
 
-        except Exception as e:
-            duration = int((time.time() - start) * 1000)
-            node_log.status = "failed"
-            node_log.error = str(e)
-            node_log.duration_ms = duration
-            node_log.finished_at = datetime.now()
-            await db.commit()
+            start = time.time()
+            try:
+                node: BaseNode = node_cls()
+                context = NodeContext(
+                    db=task_db,
+                    settings=settings,
+                    logger=logger,
+                    node_id=node_id,
+                    instance_id=instance_id,
+                    stream_queue=stream_queue,
+                )
+                result = await asyncio.wait_for(
+                    node.execute(resolved_params, context),
+                    timeout=node_timeout,
+                )
 
-            await WorkflowEngine._push_event(
-                stream_queue,
-                WorkflowEventType.NODE_ERROR,
-                {
-                    "node_id": node_id,
-                    "error": str(e),
-                    "duration_ms": duration,
-                },
-            )
-            raise
+                duration = int((time.time() - start) * 1000)
+                node_log.status = "completed"
+                node_log.output_data = json.dumps(result, ensure_ascii=False)
+                node_log.duration_ms = duration
+                node_log.finished_at = datetime.now()
+                await task_db.commit()
+
+                await WorkflowEngine._push_event(
+                    stream_queue,
+                    WorkflowEventType.NODE_COMPLETE,
+                    {"node_id": node_id, "duration_ms": duration},
+                )
+                return result
+
+            except asyncio.TimeoutError:
+                duration = int((time.time() - start) * 1000)
+                node_log.status = "failed"
+                node_log.error = f"节点执行超时 ({node_timeout}s)"
+                node_log.duration_ms = duration
+                node_log.finished_at = datetime.now()
+                await task_db.commit()
+                raise TimeoutError(f"节点 {node_id} 执行超时 ({node_timeout}s)")
+
+            except Exception as e:
+                duration = int((time.time() - start) * 1000)
+                node_log.status = "failed"
+                node_log.error = str(e)
+                node_log.duration_ms = duration
+                node_log.finished_at = datetime.now()
+                await task_db.commit()
+
+                await WorkflowEngine._push_event(
+                    stream_queue,
+                    WorkflowEventType.NODE_ERROR,
+                    {"node_id": node_id, "error": str(e), "duration_ms": duration},
+                )
+                raise
 
     # ── 辅助方法 ──────────────────────────────────────
 
     @staticmethod
-    async def _log_cancelled_node(
-        node_id: str,
-        instance_id: str,
-        db: AsyncSession,
-    ):
-        """记录被取消的节点日志
-
-        当下游节点因上游失败（``error_mode=stop``）而无需执行时，
-        创建一条状态为 ``cancelled`` 的日志记录。
-
-        Args:
-            node_id (`str`): 节点 ID
-            instance_id (`str`): 工作流实例 ID
-            db (`AsyncSession`): 数据库会话
-        """
-        log = WorkflowNodeLog(
-            instance_id=instance_id,
-            node_id=node_id,
-            node_type="",
-            status="cancelled",
-            started_at=datetime.now(),
-            finished_at=datetime.now(),
-        )
-        db.add(log)
-        await db.commit()
+    async def _log_cancelled_node(node_id: str, instance_id: str):
+        """记录被取消的节点日志（使用独立 DB session）"""
+        async with _async_session() as task_db:
+            log = WorkflowNodeLog(
+                instance_id=instance_id,
+                node_id=node_id,
+                node_type="",
+                status="cancelled",
+                started_at=datetime.now(),
+                finished_at=datetime.now(),
+            )
+            task_db.add(log)
+            await task_db.commit()
 
     @staticmethod
     async def _push_event(
@@ -466,16 +465,7 @@ class WorkflowEngine:
         event: str,
         data: dict,
     ):
-        """向 SSE 流推送事件
-
-        Args:
-            queue (`asyncio.Queue | None`):
-                事件队列，为 ``None`` 时静默跳过
-            event (`str`):
-                事件类型名称
-            data (`dict`):
-                事件数据
-        """
+        """向 SSE 流推送事件"""
         if queue is None:
             return
         await queue.put(
@@ -484,3 +474,10 @@ class WorkflowEngine:
                 "data": json.dumps(data, ensure_ascii=False),
             }
         )
+
+
+def _async_session():
+    """获取异步 DB session 上下文管理器"""
+    from app.database import AsyncSessionLocal
+
+    return AsyncSessionLocal()

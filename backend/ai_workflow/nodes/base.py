@@ -1,6 +1,7 @@
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,7 +20,7 @@ class NodeContext:
     node_id: str = ""
     instance_id: str = ""
     workflow_name: str = ""
-    stream_queue: Any = None
+    stream_queue: Optional[asyncio.Queue] = None
 
 
 class BaseNode(ABC):

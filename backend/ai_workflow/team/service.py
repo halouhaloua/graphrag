@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ai_workflow.workflow.events import WorkflowEventType
 from ai_workflow.nodes.base import BaseNode, NodeContext
 from ai_workflow.nodes.registry import NodeRegistry
+from app.config import settings
 from ai_workflow.team.model import TeamConfig
 from ai_workflow.team.prompts import ROLE_SYSTEM_PROMPT, TOOL_DESCRIPTIONS
 
@@ -71,9 +72,6 @@ class TeamExecutor:
                 "roles": list(roles.keys()),
             },
         )
-
-        settings_module = __import__("app.config", fromlist=["settings"])
-        settings = settings_module.settings
 
         current_role = start_role
         context_summary = input_params.get("input", "") if input_params else ""
