@@ -114,7 +114,7 @@ async def list_workflow_defs(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
-    query = select(WorkflowDef).where(not WorkflowDef.is_deleted)
+    query = select(WorkflowDef).where(WorkflowDef.is_deleted == False)  # noqa: E712
     if name:
         query = query.where(WorkflowDef.name.ilike(f"%{name}%"))
 
@@ -283,7 +283,7 @@ async def list_instances(
     query = (
         select(WorkflowInstance)
         .where(WorkflowInstance.sys_creator_id == user.id)
-        .where(not WorkflowInstance.is_deleted)
+        .where(WorkflowInstance.is_deleted == False)  # noqa: E712
     )
     if status:
         query = query.where(WorkflowInstance.status == status)

@@ -71,7 +71,7 @@ async def list_teams(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
-    query = select(TeamConfig).where(not TeamConfig.is_deleted)
+    query = select(TeamConfig).where(TeamConfig.is_deleted == False)  # noqa: E712
     if name:
         query = query.where(TeamConfig.name.ilike(f"%{name}%"))
     total = (

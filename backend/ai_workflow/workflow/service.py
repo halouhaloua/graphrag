@@ -178,7 +178,7 @@ class WorkflowEngine:
         result = await db.execute(
             select(WorkflowDef).where(
                 WorkflowDef.id == def_id,
-                not WorkflowDef.is_deleted,
+                WorkflowDef.is_deleted == False,  # noqa: E712
             )
         )
         wf_def = result.scalar_one_or_none()

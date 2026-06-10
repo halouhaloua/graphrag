@@ -17,6 +17,8 @@ def load_all_nodes():
         return
     _loaded = True
 
+    import ai_workflow.nodes._start  # noqa: F401
+    import ai_workflow.nodes._end  # noqa: F401
     import ai_workflow.nodes.api_call  # noqa: F401
     import ai_workflow.nodes.arxiv_search  # noqa: F401
     import ai_workflow.nodes.browser_agent  # noqa: F401
