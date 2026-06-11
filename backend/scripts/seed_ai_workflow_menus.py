@@ -24,7 +24,7 @@ from core.role.model import Role
 
 def auto_import_models():
     project_root = Path(__file__).parent.parent
-    for scan_dir in ["core", "scheduler", "online_dev", "rag"]:
+    for scan_dir in ["core", "scheduler", "online_dev", "rag", "ai_workflow"]:
         scan_path = project_root / scan_dir
         if not scan_path.exists():
             continue
@@ -62,6 +62,16 @@ AI_WORKFLOW_MENUS = [
                 "icon": "lucide:workflow",
                 "component": "/_core/ai-workflow/index",
                 "order": 1,
+                "is_system": True,
+            },
+            {
+                "name": "TeamManagement",
+                "title": "团队管理",
+                "path": "/ai-platform/team",
+                "type": "menu",
+                "icon": "lucide:users",
+                "component": "/_core/ai-workflow/team/index",
+                "order": 2,
                 "is_system": True,
             },
         ],

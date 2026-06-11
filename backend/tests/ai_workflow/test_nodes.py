@@ -100,6 +100,22 @@ class TestChatNode:
         result = await node.execute({"user_question": ""}, ctx)
         assert "error" in result
 
+    def test_chat_metadata_has_tools_param(self):
+        meta = NodeRegistry.get_metadata("chat")
+        assert meta is not None
+        params = meta.get("params", {})
+        assert "tools" in params
+        assert params["tools"]["type"] == "list"
+        assert "max_tool_rounds" in params
+        assert params["max_tool_rounds"]["default"] == 10
+
+    def test_chat_no_tools_returns_same_metadata(self):
+        """验证 tools=[] 时 metadata 仍然兼容原有参数"""
+        meta = NodeRegistry.get_metadata("chat")
+        assert "user_question" in meta.get("params", {})
+        assert "system_prompt" in meta.get("params", {})
+        assert "temperature" in meta.get("params", {})
+
 
 class TestPythonExecuteNode:
     @pytest.mark.asyncio

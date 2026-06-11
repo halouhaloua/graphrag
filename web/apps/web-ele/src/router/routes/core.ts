@@ -62,7 +62,35 @@ const coreRoutes: RouteRecordRaw[] = [
         component: () => import('#/views/_core/rag/file-manager/kb-task.vue'),
         meta: { hideInMenu: true, title: '知识库文件编辑' },
       },
+      // AI平台 - 流程编排
+      {
+        name: 'AiWorkflow',
+        path: 'ai-platform/workflow',
+        component: () => import('#/views/_core/ai-workflow/index.vue'),
+        meta: { hideInMenu: true, title: '流程编排' },
+      },
+      // AI平台 - 团队管理
+      {
+        name: 'AiWorkflowTeam',
+        path: 'ai-platform/team',
+        component: () => import('#/views/_core/ai-workflow/team/index.vue'),
+        meta: { hideInMenu: true, title: '团队管理' },
+      },
     ],
+  },
+  // AI工作流编辑器（全屏，不使用 BasicLayout）
+  {
+    name: 'AiWorkflowDetail',
+    path: '/ai-platform/workflow/:id',
+    component: () => import('#/views/_core/ai-workflow/detail.vue'),
+    meta: { hideInMenu: true, hideInTab: true, title: '工作流编辑器' },
+  },
+  // AI团队详情编辑器（全屏，不使用 BasicLayout）
+  {
+    name: 'AiWorkflowTeamDetail',
+    path: '/ai-platform/team/:id',
+    component: () => import('#/views/_core/ai-workflow/team/detail.vue'),
+    meta: { hideInMenu: true, hideInTab: true, title: '团队编辑器' },
   },
   {
     component: AuthPageLayout,
@@ -141,13 +169,6 @@ const coreRoutes: RouteRecordRaw[] = [
       hideInTab: true,
       title: '文件预览',
     },
-  },
-  // AI工作流编辑器（全屏，不使用 BasicLayout）
-  {
-    name: 'AiWorkflowDetail',
-    path: '/ai-platform/workflow/:id',
-    component: () => import('#/views/_core/ai-workflow/detail.vue'),
-    meta: { hideInMenu: true, hideInTab: true, title: '工作流编辑器' },
   },
   // 表单页面 - 新增（主应用）
   {

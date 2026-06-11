@@ -42,7 +42,7 @@ export const NODE_TYPE_MAP: Record<string, NodeTypeMeta> = {
     description: '调用大语言模型进行对话',
     inputs: 1,
     outputs: 1,
-    defaultParams: { temperature: 0.7, system_prompt: '' },
+    defaultParams: { temperature: 0.7, system_prompt: '', user_question: '', tools: [], max_tool_rounds: 10 },
   },
   serper_search: {
     type: 'serper_search',

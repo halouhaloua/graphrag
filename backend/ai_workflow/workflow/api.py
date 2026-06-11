@@ -417,4 +417,10 @@ async def cancel_instance(
 async def list_node_types(
     _user: User = Depends(get_current_user),
 ):
-    return NodeRegistry.get_all_metadata()
+    return {
+        "code": 0,
+        "data": [
+            {"type": t, **(NodeRegistry.get_metadata(t) or {})}
+            for t in NodeRegistry.get_all_types()
+        ],
+    }

@@ -5,14 +5,23 @@ import { computed, nextTick, onMounted, ref } from 'vue';
 import { IconifyIcon, Trash2 } from '@vben/icons';
 import {
   ElButton,
+  ElCheckbox,
+  ElCheckboxGroup,
   ElInput,
+  ElInputNumber,
   ElOption,
   ElSelect,
   ElSlider,
   ElTag,
 } from 'element-plus';
 
-import { getNodeMeta } from '../nodes/index';
+import { getNodeMeta, NODE_TYPE_MAP } from '../nodes/index';
+
+const availableTools = computed(() => {
+  return Object.values(NODE_TYPE_MAP).filter(
+    (n) => n.type && !['_start', '_end', 'chat'].includes(n.type),
+  );
+});
 
 const props = defineProps<{
   selectedNode: Node | null;
@@ -110,6 +119,31 @@ function updateParam(key: string, value: any) {
             :max="2"
             :step="0.1"
             @update:model-value="updateParam('temperature', $event)"
+          />
+        </div>
+        <div class="cfg-section">
+          <div class="cfg-section__label">可用工具</div>
+          <ElCheckboxGroup
+            :model-value="localParams.tools || []"
+            @update:model-value="updateParam('tools', $event)"
+          >
+            <div v-for="t in availableTools" :key="t.type" class="tool-check-item">
+              <ElCheckbox :label="t.type" :value="t.type">
+                {{ t.label }}
+              </ElCheckbox>
+            </div>
+          </ElCheckboxGroup>
+          <div v-if="availableTools.length === 0" class="tool-empty">暂无可用工具</div>
+        </div>
+        <div class="cfg-section">
+          <div class="cfg-section__label">最大工具轮数</div>
+          <ElInputNumber
+            :model-value="localParams.max_tool_rounds ?? 10"
+            :min="1"
+            :max="50"
+            size="small"
+            :style="{ width: '100%' }"
+            @update:model-value="updateParam('max_tool_rounds', $event)"
           />
         </div>
       </template>
@@ -412,5 +446,13 @@ function updateParam(key: string, value: any) {
 }
 .config-card__body :deep(.el-textarea__inner) {
   border-radius: 8px;
+}
+.tool-check-item {
+  padding: 3px 0;
+}
+.tool-empty {
+  font-size: 12px;
+  color: #94a3b8;
+  padding: 4px 0;
 }
 </style>

@@ -174,12 +174,13 @@ export async function cancelWorkflowApi(instId: string) {
 
 // ============ 团队相关 ============
 
-/** 团队角色定义 */
+/** 团队角色定义（匹配后端 TeamRoleSchema） */
 export interface TeamRoleDef {
-  name: string;
-  description: string;
+  agent_description?: string;
+  model_name?: string;
+  max_iterations?: number;
   tools: string[];
-  prompt: string;
+  termination_conditions?: any[];
 }
 
 /** 团队配置 */

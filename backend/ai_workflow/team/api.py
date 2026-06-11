@@ -110,10 +110,7 @@ async def update_team(
     team = await _ensure_team_exists(team_id, db)
     update_data = data.model_dump(exclude_unset=True)
     if "roles" in update_data:
-        update_data["roles"] = json.dumps(
-            {k: v.model_dump() for k, v in update_data["roles"].items()},
-            ensure_ascii=False,
-        )
+        update_data["roles"] = json.dumps(update_data["roles"], ensure_ascii=False)
     for key, value in update_data.items():
         setattr(team, key, value)
     await db.commit()
