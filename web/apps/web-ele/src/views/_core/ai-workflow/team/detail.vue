@@ -39,12 +39,12 @@ import {
 } from 'element-plus';
 
 import {
-  getNodeTypesApi,
   getTeamDetailApi,
   createTeamApi,
   updateTeamApi,
 } from '#/api/core/ai-workflow';
 import { requestClient } from '#/api/request';
+import { NODE_TYPE_MAP } from '../editor/nodes/index';
 
 defineOptions({ name: 'AiWorkflowTeamDetail' });
 
@@ -73,13 +73,11 @@ const localStartRole = ref('');
 const localRoles = ref<RoleFormItem[]>([]);
 const dirty = ref(false);
 
-// ── 节点类型缓存 ──
-const nodeTypes = ref<{ type: string; name: string }[]>([]);
-
+// ── 可用工具列表（从静态 NODE_TYPE_MAP 读取，不依赖 API）──
 const availableNodeTypes = computed(() => {
-  return (nodeTypes.value || []).filter(
-    (n) => n.type && !['_start', '_end', 'handoff', 'final_answer'].includes(n.type),
-  );
+  return Object.entries(NODE_TYPE_MAP)
+    .filter(([type]) => type && !['_start', '_end'].includes(type))
+    .map(([type, meta]) => ({ type, name: meta.label }));
 });
 
 // ── role 编辑器抽屉 ──
@@ -391,15 +389,6 @@ const goBack = () => router.push('/ai-platform/team');
 // ── 生命周期 ──
 onMounted(async () => {
   await loadTeam();
-  try {
-    const types = await getNodeTypesApi();
-    nodeTypes.value = types.map((t: any) => ({
-      type: t.type || '',
-      name: t.name || t.type || '',
-    }));
-  } catch {
-    // 静默失败
-  }
 });
 
 onBeforeUnmount(() => {
