@@ -27,7 +27,7 @@ def _get_embedding_model():
         return _embedding_model_instance
     from sentence_transformers import SentenceTransformer
 
-    default_path = str(Path(__file__).parent.parent.parent.parent / "bge-small-zh-v1.5")
+    default_path = str(Path(__file__).parent.parent.parent.parent / ".bge-small-zh-v1.5")
     model_path = os.environ.get("RAG_EMBEDDING_MODEL_PATH", default_path)
     _embedding_model_instance = SentenceTransformer(model_path)
     if torch.cuda.is_available():
@@ -72,7 +72,7 @@ class ConstructionConfig:
 
 @dataclass
 class TreeCommConfig:
-    struct_weight: float = 0.3
+    struct_weight: float = 0.4
     enable_fast_mode: bool = True
 
     def get_embedding_model(self):

@@ -1,7 +1,7 @@
 import type { Edge, Node } from '@vue-flow/core';
 
 import { nanoid } from 'nanoid';
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import { ElMessage } from 'element-plus';
 
@@ -97,11 +97,10 @@ export function useWorkflowEditor(workflowId: string) {
   const showMinimap = ref(true);
   const initialized = ref(false);
 
-  const hasUnsavedChanges = computed(() => store.hasUnsavedChanges);
   const canUndo = computed(() => store.canUndo);
   const canRedo = computed(() => store.canRedo);
 
-  let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   async function init() {
     loading.value = true;
@@ -160,7 +159,6 @@ export function useWorkflowEditor(workflowId: string) {
           edges: flowEdges,
         });
         store.markAsSaved();
-        ElMessage.success('已保存');
         return workflow.value.id;
       }
       return undefined;
@@ -172,13 +170,24 @@ export function useWorkflowEditor(workflowId: string) {
     }
   }
 
-  function triggerAutoSave() {
-    if (autoSaveTimer) clearTimeout(autoSaveTimer);
-    autoSaveTimer = setTimeout(async () => {
-      if (store.hasUnsavedChanges && workflow.value?.id) {
-        await save();
-      }
-    }, 5000);
+  async function _doSave() {
+    if (!workflow.value?.id) return;
+    saving.value = true;
+    try {
+      const flowNodes = nodes.value.map(fromFlowNode);
+      const flowEdges = edges.value.map(fromFlowEdge);
+      await updateWorkflowDefApi(workflow.value.id, {
+        name: workflow.value.name,
+        description: workflow.value.description,
+        nodes: flowNodes,
+        edges: flowEdges,
+      });
+      store.markAsSaved();
+    } catch {
+      // 静默保存失败忽略
+    } finally {
+      saving.value = false;
+    }
   }
 
   watch(
@@ -186,7 +195,8 @@ export function useWorkflowEditor(workflowId: string) {
     () => {
       if (!initialized.value) return;
       store.saveHistory({ nodes: nodes.value, edges: edges.value });
-      triggerAutoSave();
+      if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
+      saveDebounceTimer = setTimeout(_doSave, 500);
     },
     { deep: true },
   );
@@ -315,8 +325,32 @@ export function useWorkflowEditor(workflowId: string) {
     nodes.value.push(newNode);
   }
 
+  function deleteSelectedNode() {
+    const node = selectedNode.value;
+    if (!node) return;
+    if (node.data?.type === '_start' || node.data?.type === '_end') return;
+    nodes.value = nodes.value.filter((n) => n.id !== node.id);
+    edges.value = edges.value.filter(
+      (e) => e.source !== node.id && e.target !== node.id,
+    );
+    selectedNode.value = null;
+  }
+
+  function onKeyDown(event: KeyboardEvent) {
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      const tag = event.target as HTMLElement;
+      if (tag.tagName === 'INPUT' || tag.tagName === 'TEXTAREA' || tag.isContentEditable) return;
+      deleteSelectedNode();
+    }
+  }
+
+  onMounted(() => {
+    document.addEventListener('keydown', onKeyDown);
+  });
+
   onBeforeUnmount(() => {
-    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    document.removeEventListener('keydown', onKeyDown);
+    if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
     store.cleanup();
   });
 
@@ -328,7 +362,6 @@ export function useWorkflowEditor(workflowId: string) {
     loading,
     saving,
     showMinimap,
-    hasUnsavedChanges,
     canUndo,
     canRedo,
     initialized,
@@ -345,5 +378,6 @@ export function useWorkflowEditor(workflowId: string) {
     updateNodeParams,
     updateWorkflowName,
     addNodeAtCenter,
+    deleteSelectedNode,
   };
 }

@@ -26,7 +26,7 @@ from rag.config import get_config
 
 
 class FastTreeComm:
-    def __init__(self, graph, struct_weight=0.3, config=None, chunks_data=None):
+    def __init__(self, graph, struct_weight=None, config=None, chunks_data=None):
         """
         :param graph: Input graph (NetworkX DiGraph)
         :param struct_weight: Structural similarity weight (float between 0 and 1)
@@ -40,12 +40,15 @@ class FastTreeComm:
         self.graph = graph
         self.chunks_data = chunks_data or {}
 
-        if struct_weight == 0.3:
-            struct_weight = config.tree_comm.struct_weight
-
+        if struct_weight:
+            self.struct_weight = struct_weight
+        else:
+            if config:
+                self.struct_weight = config.tree_comm.struct_weight
+            else:
+                  self.struct_weight = 0.3
         self.model = config.tree_comm.get_embedding_model()
         self.semantic_cache = {}
-        self.struct_weight = struct_weight
         self.node_list = list(graph.nodes())
         self.node_names = {
             n: graph.nodes[n]["properties"]["name"] for n in graph.nodes()

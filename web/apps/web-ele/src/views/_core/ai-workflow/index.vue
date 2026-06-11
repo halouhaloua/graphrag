@@ -10,17 +10,16 @@ import {
   Plus,
   Send,
   Trash2,
+  Workflow,
 } from '@vben/icons';
 
 import {
   ElButton,
-  ElCard,
   ElEmpty,
   ElInput,
   ElMessage,
   ElMessageBox,
   ElPagination,
-  ElTag,
   ElTooltip,
 } from 'element-plus';
 import { useRouter } from 'vue-router';
@@ -155,6 +154,21 @@ const handleSizeChange = (size: number) => {
   loadList();
 };
 
+function formatTime(dateStr?: string): string {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const h = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    return `${y}-${m}-${day} ${h}:${min}`;
+  } catch {
+    return dateStr;
+  }
+}
+
 onMounted(() => {
   loadList();
 });
@@ -188,89 +202,65 @@ onMounted(() => {
       <!-- 卡片网格 -->
       <div
         v-if="list.length > 0"
-        class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"
+        class="doc-grid"
       >
-        <ElCard
+        <div
           v-for="wf in list"
           :key="wf.id"
-          shadow="hover"
-          class="group workflow-card cursor-pointer transition-shadow"
-          :body-style="{ padding: '0' }"
-          style="border: none"
+          class="doc-card group"
           @click="handleView(wf)"
         >
-          <div class="p-4">
-            <!-- 头部：图标 + 名称 + 操作 -->
-            <div class="mb-3 flex items-center gap-3">
-              <div class="wf-icon flex-shrink-0">
-                <Send class="h-5 w-5 text-white" />
-              </div>
-              <div class="min-w-0 flex-1">
-                <div class="flex items-center justify-between">
-                  <div
-                    class="min-w-0 flex-1 truncate text-sm font-medium"
-                  >
-                    {{ wf.name }}
-                  </div>
-                  <div
-                    class="flex flex-shrink-0 items-center -space-x-1 opacity-0 transition-opacity group-hover:opacity-100"
-                    @click.stop
-                  >
-                    <ElTooltip content="编辑" placement="top">
-                      <ElButton text size="small" @click="handleEdit(wf)">
-                        <Edit class="h-3.5 w-3.5" />
-                      </ElButton>
-                    </ElTooltip>
-                    <ElTooltip content="执行" placement="top">
-                      <ElButton text size="small" @click="handleRun(wf)">
-                        <Play class="h-3.5 w-3.5" />
-                      </ElButton>
-                    </ElTooltip>
-                    <ElTooltip
-                      :content="wf.is_published ? '取消发布' : '发布'"
-                      placement="top"
-                    >
-                      <ElButton text size="small" @click="handlePublish(wf)">
-                        <Send class="h-3.5 w-3.5" />
-                      </ElButton>
-                    </ElTooltip>
-                    <ElTooltip content="删除" placement="top">
-                      <ElButton text size="small" @click="handleDelete(wf)">
-                        <Trash2 class="h-3.5 w-3.5" />
-                      </ElButton>
-                    </ElTooltip>
-                  </div>
-                </div>
-              </div>
+          <!-- 头部 -->
+          <div class="card-header">
+            <div class="card-icon" :class="wf.is_published ? 'is-published' : 'is-draft'">
+              <Workflow class="h-5 w-5" />
             </div>
-
-            <!-- 描述 -->
-            <div
-              v-if="wf.description"
-              class="text-muted-foreground mb-3 line-clamp-2 text-xs"
-            >
-              {{ wf.description }}
+            <div class="card-title-section">
+              <h4 class="doc-name">{{ wf.name }}</h4>
             </div>
-
-            <!-- 底部：节点数 + 状态 + 创建时间 -->
-            <div class="flex items-center justify-between">
-              <div class="flex gap-1">
-                <ElTag size="small">
-                  {{ wf.nodes?.length || 0 }} 个节点
-                </ElTag>
-                <ElTag
-                  size="small"
-                  :type="wf.is_published ? 'success' : 'info'"
-                >
-                  {{ wf.is_published ? '已发布' : '未发布' }}
-                </ElTag>
-              </div>
-              <span class="text-muted-foreground text-xs">
-                {{ wf.sys_create_datetime }}
-              </span>
+            <div class="card-actions">
+              <ElTooltip content="编辑" placement="top">
+                <ElButton circle size="small" class="action-btn" @click.stop="handleEdit(wf)">
+                  <Edit style="width: 14px; height: 14px" />
+                </ElButton>
+              </ElTooltip>
+              <ElTooltip content="执行" placement="top">
+                <ElButton circle size="small" class="action-btn" :disabled="!wf.is_published" @click.stop="handleRun(wf)">
+                  <Play style="width: 14px; height: 14px" />
+                </ElButton>
+              </ElTooltip>
+              <ElTooltip :content="wf.is_published ? '取消发布' : '发布'" placement="top">
+                <ElButton circle size="small" class="action-btn" @click.stop="handlePublish(wf)">
+                  <Send style="width: 14px; height: 14px" />
+                </ElButton>
+              </ElTooltip>
+              <ElTooltip content="删除" placement="top">
+                <ElButton circle size="small" class="action-btn delete-btn" @click.stop="handleDelete(wf)">
+                  <Trash2 style="width: 14px; height: 14px" />
+                </ElButton>
+              </ElTooltip>
             </div>
           </div>
-        </ElCard>
+
+          <!-- 描述 -->
+          <div class="card-description">
+            <p v-if="wf.description" class="desc-text">{{ wf.description }}</p>
+            <p v-else class="desc-text empty">暂无描述</p>
+          </div>
+
+          <!-- 标签 -->
+          <div class="card-status-row">
+            <ElTag :type="wf.is_published ? 'success' : 'info'" size="small" effect="light">
+              {{ wf.is_published ? '已发布' : '未发布' }}
+            </ElTag>
+          </div>
+
+          <!-- 底部 -->
+          <div class="card-footer">
+              <span class="doc-subtitle">{{ wf.nodes?.length || 0 }} 个节点</span>
+            <span class="footer-item time">{{ formatTime(wf.sys_create_datetime) }}</span>
+          </div>
+        </div>
       </div>
 
       <!-- 空状态 -->
@@ -305,28 +295,152 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.workflow-card :deep(.el-card__body) {
-  padding: 0;
+.doc-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
 }
 
-.wf-icon {
+.doc-card {
   display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px;
+  cursor: pointer;
+  background: var(--el-bg-color);
+  /* border: 1px solid var(--el-border-color-lighter); */
+  border-radius: 12px;
+  transition: all 0.25s ease;
+}
+
+.doc-card:hover {
+  border-color: var(--el-border-color);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 6%);
+  transform: translateY(-2px);
+}
+
+.card-header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.card-icon {
+  display: flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   width: 40px;
   height: 40px;
-  background: linear-gradient(
-    135deg,
-    var(--el-color-primary-light-3),
-    var(--el-color-primary)
-  );
   border-radius: 8px;
 }
 
-.line-clamp-2 {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+.card-icon.is-published {
+  color: var(--el-color-success);
+  background: var(--el-color-success-light-9);
+}
+
+.card-icon.is-draft {
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.card-title-section {
+  flex: 1;
+  min-width: 0;
+}
+
+.doc-name {
+  margin: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  white-space: nowrap;
+}
+
+.doc-subtitle {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.card-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.doc-card:hover .card-actions {
+  opacity: 1;
+}
+
+.action-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--el-text-color-secondary);
+  background: transparent;
+  border: none;
+}
+
+.action-btn:hover {
+  color: var(--el-text-color-primary);
+  background: var(--el-fill-color-lighter);
+}
+
+.action-btn.delete-btn:hover:not(:disabled) {
+  color: var(--el-color-danger);
+  background: var(--el-color-danger-light-9);
+}
+
+.card-description {
+  min-height: 20px;
+}
+
+.desc-text {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-line-clamp: 2;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--el-text-color-regular);
+  -webkit-box-orient: vertical;
+}
+
+.desc-text.empty {
+  font-style: italic;
+  color: var(--el-text-color-placeholder);
+}
+
+.card-status-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.footer-item {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.footer-item.time {
+  color: var(--el-text-color-placeholder);
 }
 </style>

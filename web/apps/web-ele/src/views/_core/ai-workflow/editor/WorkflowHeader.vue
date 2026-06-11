@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { WorkflowDef } from '#/api/core/ai-workflow';
 
-import { ArrowLeft, History, Play, Send } from '@vben/icons';
+import { ArrowLeft, Play, Send } from '@vben/icons';
 import {
   ElButton,
   ElInput,
@@ -12,16 +12,13 @@ import {
 
 const props = defineProps<{
   workflow: WorkflowDef | null;
-  hasUnsavedChanges: boolean;
   saving: boolean;
 }>();
 
 const emit = defineEmits<{
   back: [];
-  save: [];
   publish: [publish: boolean];
   run: [];
-  versionHistory: [];
   updateName: [name: string];
 }>();
 
@@ -48,41 +45,18 @@ function handleRun() {
           <ArrowLeft class="h-4 w-4" />
         </ElButton>
       </ElTooltip>
-      <ElInput
-        :model-value="workflow?.name || '未命名工作流'"
-        class="workflow-header__title-input"
-        size="small"
-        @update:model-value="emit('updateName', $event)"
-      />
+      <div class="workflow-header__title-text">
+        {{ workflow?.name || '未命名工作流' }}
+      </div>
       <ElTag v-if="workflow?.is_published" type="success" size="small" effect="dark">
         已发布
       </ElTag>
       <ElTag v-else type="warning" size="small" effect="dark">
         未发布
       </ElTag>
-      <ElTag type="primary" size="small" effect="plain">
-        v{{ workflow?.version || 1 }} · 编辑中
-      </ElTag>
     </div>
 
     <div class="workflow-header__right">
-      <span
-        class="workflow-header__save-status"
-        :class="{ 'is-dirty': hasUnsavedChanges }"
-      >
-        {{ hasUnsavedChanges ? '有未保存的更改' : '已保存' }}
-      </span>
-
-      <ElTooltip content="版本历史" placement="bottom">
-        <ElButton
-          text
-          class="!text-foreground"
-          size="small"
-          @click="emit('versionHistory')"
-        >
-          <History class="h-4 w-4" />
-        </ElButton>
-      </ElTooltip>
 
       <ElButton
         type="primary"
@@ -143,5 +117,12 @@ function handleRun() {
 }
 .workflow-header__save-status.is-dirty {
   color: #f59e0b;
+}
+
+.workflow-header__title-text {
+  font-size: 14px;
+  padding: 0 8px;
+  line-height: 28px; /* 和 small 尺寸输入框高度对齐 */
+  cursor: pointer;
 }
 </style>

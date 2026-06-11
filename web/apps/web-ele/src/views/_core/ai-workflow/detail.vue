@@ -4,11 +4,11 @@ import { useRoute, useRouter } from 'vue-router';
 
 import { VueFlow } from '@vue-flow/core';
 import '@vue-flow/core/dist/style.css';
-import { Background, BackgroundVariant } from '@vue-flow/background';
+// ✅ 移除了 @vue-flow/background，不再需要它
 import { Controls } from '@vue-flow/controls';
 import { MiniMap } from '@vue-flow/minimap';
 
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessageBox } from 'element-plus';
 
 import { createWorkflowDefApi } from '#/api/core/ai-workflow';
 
@@ -16,8 +16,8 @@ import { useWorkflowEditor } from './editor/composables/useWorkflowEditor';
 import WorkflowHeader from './editor/WorkflowHeader.vue';
 import WorkflowToolbar from './editor/WorkflowToolbar.vue';
 import NodeConfigPanel from './editor/panels/NodeConfigPanel.vue';
-import NodeSelectorPanel from './editor/nodes/NodeSelectorPanel.vue';
 import WorkflowNode from './editor/nodes/WorkflowNode.vue';
+import NodeSelectorPanel from './editor/nodes/NodeSelectorPanel.vue';
 
 defineOptions({ name: 'AiWorkflowDetail' });
 
@@ -27,6 +27,9 @@ const router = useRouter();
 let workflowId = route.params.id as string;
 
 const creating = ref(false);
+const showNodeSelector = ref(false);
+
+// ✅ 移除了 viewport 相关的监听和计算，完全不需要了
 
 const {
   nodes,
@@ -36,7 +39,6 @@ const {
   loading,
   saving,
   showMinimap,
-  hasUnsavedChanges,
   canUndo,
   canRedo,
   init,
@@ -52,6 +54,7 @@ const {
   updateNodeParams,
   updateWorkflowName,
   addNodeAtCenter,
+  deleteSelectedNode,
 } = useWorkflowEditor(workflowId);
 
 onMounted(async () => {
@@ -86,10 +89,6 @@ async function showCreateDialog() {
 
 const goBack = () => router.push('/ai-platform/workflow');
 
-async function handleSave() {
-  await save();
-}
-
 async function handlePublish(publishFlag: boolean) {
   if (!workflow.value?.id) {
     const savedId = await save();
@@ -109,7 +108,12 @@ async function handleRun() {
 }
 
 function handleAddNode() {
-  addNodeAtCenter('chat');
+  showNodeSelector.value = true;
+}
+
+function onSelectNode(type: string) {
+  addNodeAtCenter(type);
+  showNodeSelector.value = false;
 }
 </script>
 
@@ -117,19 +121,14 @@ function handleAddNode() {
   <div class="workflow-editor" v-loading="loading || creating">
     <WorkflowHeader
       :workflow="workflow"
-      :has-unsaved-changes="hasUnsavedChanges"
       :saving="saving"
       @back="goBack"
-      @save="handleSave"
       @publish="handlePublish"
       @run="handleRun"
-      @version-history="ElMessage.info('版本历史功能开发中')"
       @update-name="updateWorkflowName"
     />
 
     <div class="workflow-editor__body">
-      <NodeSelectorPanel />
-
       <div class="workflow-editor__canvas">
         <VueFlow
           v-model:nodes="nodes"
@@ -147,7 +146,8 @@ function handleAddNode() {
           @node-click="(e: any) => onNodeClick(e.node)"
           @pane-click="onPaneClick"
         >
-          <Background :gap="20" :variant="BackgroundVariant.Dots" color="#e2e8f0" />
+          <!-- ✅ 移除了 <Background> 组件，改用纯 CSS 背景 -->
+
           <MiniMap
             v-if="showMinimap"
             position="bottom-right"
@@ -156,12 +156,15 @@ function handleAddNode() {
           />
           <Controls position="bottom-left" />
         </VueFlow>
-      </div>
 
-      <NodeConfigPanel
-        :selected-node="selectedNode"
-        @update-params="updateNodeParams"
-      />
+        <NodeConfigPanel
+          v-if="selectedNode"
+          :selected-node="selectedNode"
+          @update-params="updateNodeParams"
+          @delete-node="deleteSelectedNode"
+          @close="onPaneClick"
+        />
+      </div>
     </div>
 
     <WorkflowToolbar
@@ -175,34 +178,60 @@ function handleAddNode() {
       @toggle-minimap="showMinimap = !showMinimap"
       @add-node="handleAddNode"
     />
+
+    <NodeSelectorPanel
+      v-if="showNodeSelector"
+      @close="showNodeSelector = false"
+      @add-node="onSelectNode"
+    />
   </div>
 </template>
 
 <style>
+/* 全局容器 */
 .workflow-editor {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #f8fafc;
   overflow: hidden;
 }
+
 .workflow-editor__body {
   flex: 1;
   display: flex;
   overflow: hidden;
   position: relative;
 }
+
+/* ✅ 核心：在这里设置固定点阵背景 */
 .workflow-editor__canvas {
   flex: 1;
   position: relative;
+  /* 背景色 */
+  background-color: #f8fafc;
+  /* 绘制圆点：颜色 #cbd5e1，半径 1.5px */
+  background-image: radial-gradient(circle, #cbd5e1 1.5px, transparent 1.5px);
+  /* 固定间距 32px */
+  background-size: 32px 32px;
+  /* 默认就是相对于屏幕固定的，不需要写 background-position */
 }
+
+/* 确保 VueFlow 内部的画布背景透明，透出底层的 CSS 点阵 */
 .workflow-editor__canvas .vue-flow {
   width: 100%;
   height: 100%;
+  background: transparent !important;
 }
+
+.workflow-editor__canvas .vue-flow__pane {
+  background: transparent !important;
+}
+
+/* 节点和连线样式 */
 .vue-flow__node {
   cursor: pointer;
 }
+
 .vue-flow__edge-path {
   stroke-width: 2;
 }

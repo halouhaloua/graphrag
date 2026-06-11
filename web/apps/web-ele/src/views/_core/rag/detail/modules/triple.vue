@@ -282,6 +282,9 @@ onMounted(() => {
 <template>
   <div class="triple-tab">
     <div class="file-selector">
+      <span class="label">节点: {{ nodeRes.total }}</span>
+      <!-- <span class="sep">|</span> -->
+      <span class="label">边: {{ edgeRes.total }}</span>
       <span class="label">选择文件：</span>
       <ElSelect
         v-model="selectedFileId"
@@ -302,12 +305,6 @@ onMounted(() => {
     </div>
 
     <div class="triple-content">
-      <div class="graph-summary">
-        <span>节点: {{ nodeRes.total }}</span>
-        <span class="sep">|</span>
-        <span>边: {{ edgeRes.total }}</span>
-      </div>
-
       <ElTabs v-model="activeSubTab" class="sub-tabs">
         <!-- ─── 节点管理 ─── -->
         <ElTabPane label="节点管理" name="nodes">
@@ -317,7 +314,7 @@ onMounted(() => {
                 添加节点
               </ElButton>
             </div>
-            <ElTable :data="nodeRes.items" border size="small" max-height="400" v-loading="loadingNodes">
+            <ElTable :data="nodeRes.items" border size="small" max-height="600" v-loading="loadingNodes">
               <ElTableColumn prop="name" label="名称" min-width="160" show-overflow-tooltip />
               <ElTableColumn prop="category" label="类别" width="140">
                 <template #default="{ row }">
@@ -369,7 +366,7 @@ onMounted(() => {
                 添加边
               </ElButton>
             </div>
-            <ElTable :data="edgeRes.items" border size="small" max-height="400" v-loading="loadingEdges">
+            <ElTable :data="edgeRes.items" border size="small" max-height="600" v-loading="loadingEdges">
               <ElTableColumn prop="source" label="源节点" min-width="160" show-overflow-tooltip />
               <ElTableColumn prop="name" label="关系" width="140" />
               <ElTableColumn prop="target" label="目标节点" min-width="160" show-overflow-tooltip />
@@ -511,7 +508,7 @@ onMounted(() => {
   flex-shrink: 0;
   gap: 8px;
   align-items: center;
-  margin-bottom: 10px;
+  margin-bottom: 4px;
 }
 
 .file-selector .label {
@@ -538,6 +535,7 @@ onMounted(() => {
   margin-bottom: 8px;
   font-size: 13px;
   color: var(--el-text-color-secondary);
+  align-items: baseline; /* 可选：让文字基线对齐，更美观 */ 
 }
 
 .sep {

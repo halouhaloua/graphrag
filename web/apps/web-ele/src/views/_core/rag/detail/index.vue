@@ -67,14 +67,15 @@ watch(activeTab, (tab: string) => {
     <div v-if="loading" class="loading-state">加载中...</div>
     <div v-else-if="kb" class="flex h-full flex-col">
       <div class="kb-header">
-        <div class="kb-info">
-          <h4 class="kb-title">{{ kb.name }}</h4>
-          <p v-if="kb.description" class="kb-desc">{{ kb.description }}</p>
-          <div class="kb-meta">
+        <div class="left-area">
+         <div>
+            <h4 class="kb-title">{{ kb.name }}</h4>
+        </div>
+        <div class="kb-meta">
             <span>文件数: {{ kb.file_count }}</span>
             <span class="sep">|</span>
             <span>类型: {{ kb.kb_type === 'demo' ? '演示' : '用户' }}</span>
-          </div>
+         </div>
         </div>
         <div class="header-actions">
           <div v-if="activeTab === 'graph'" class="graph-file-selector">
@@ -134,16 +135,22 @@ watch(activeTab, (tab: string) => {
 
 .kb-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
-  margin-bottom: 16px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
   background: var(--el-bg-color-overlay);
   border-radius: 8px;
 }
 
+.left-area {
+  display: flex;
+  gap: 24px;           
+  align-items: center; 
+}
+
 .kb-title {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: 20px;
 }
 
