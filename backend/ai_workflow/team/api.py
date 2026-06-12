@@ -14,6 +14,7 @@ from app.base_schema import PaginatedResponse
 from utils.security import get_current_user
 from core.user.model import User
 
+from ai_workflow.events import sse_encode
 from ai_workflow.team.model import TeamConfig
 from ai_workflow.team.schema import (
     TeamConfigCreate,
@@ -169,14 +170,17 @@ async def run_team(
     config = await _ensure_team_exists(team_id, db)
 
     async def _bg():
-        from app.database import AsyncSessionLocal
+        try:
+            from app.database import AsyncSessionLocal
 
-        async with AsyncSessionLocal() as exec_db:
-            await TeamExecutor.execute_team(
-                config=config,
-                input_params=req.input_params,
-                db=exec_db,
-            )
+            async with AsyncSessionLocal() as exec_db:
+                await TeamExecutor.execute_team(
+                    config=config,
+                    input_params=req.input_params,
+                    db=exec_db,
+                )
+        except Exception:
+            logger.exception("后台团队任务执行失败 team_id=%s", team_id)
 
     asyncio.create_task(_bg())
     return {"message": "团队任务已启动", "team_id": team_id}
@@ -207,13 +211,13 @@ async def stream_team(
             try:
                 while True:
                     event = await queue.get()
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    yield sse_encode(event)
                     if event.get("event") in ("workflow_complete", "workflow_error"):
                         break
             except asyncio.CancelledError:
                 task.cancel()
             except Exception as e:
-                yield f"data: {json.dumps({'event': 'error', 'data': str(e)})}\n\n"
+                yield sse_encode({"event": "error", "data": str(e)})
             finally:
                 if not task.done():
                     task.cancel()

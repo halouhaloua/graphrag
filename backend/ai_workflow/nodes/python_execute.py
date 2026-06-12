@@ -67,13 +67,28 @@ class PythonExecuteNode(BaseNode):
         if not isinstance(variables, dict):
             raise ValueError("variables参数必须是字典类型")
 
-        sandbox_host = os.getenv("SANDBOX_HOST", "http://127.0.0.1")
+        sandbox_host = os.getenv("SANDBOX_HOST", "127.0.0.1")
         sandbox_port = int(os.getenv("SANDBOX_PORT", "8000"))
         sandbox_api_key = os.getenv("SANDBOX_API_KEY", "")
         sandbox_timeout = float(os.getenv("SANDBOX_REQUEST_TIMEOUT", "3600"))
 
+        # 协议探测：保持显式协议不变；裸主机名 → localhost 用 http，远程用 https
         if "http://" not in sandbox_host and "https://" not in sandbox_host:
-            sandbox_host = "http://" + sandbox_host
+            is_local = sandbox_host in ("127.0.0.1", "localhost", "0.0.0.0", "::1")
+            sandbox_host = ("http://" if is_local else "https://") + sandbox_host
+
+        # 安全检查：API key 通过 HTTP 发送到非 localhost 时记录警告
+        if sandbox_api_key and sandbox_host.startswith("http://"):
+            host_only = sandbox_host[len("http://"):]
+            if ":" in host_only:
+                host_only = host_only.split(":")[0]
+            if host_only not in ("127.0.0.1", "localhost", "0.0.0.0", "::1"):
+                logger.warning(
+                    "SECURITY: Sandbox API key sent over HTTP to %s. "
+                    "Use https:// for SANDBOX_HOST in production.",
+                    host_only,
+                )
+
         api_url = f"{sandbox_host}:{sandbox_port}/v1/sandbox/run"
 
         if language == "python" and variables:

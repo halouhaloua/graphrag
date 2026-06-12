@@ -127,7 +127,16 @@ function setupAccessGuard(router: Router) {
             preferences.app.defaultHomePath,
         );
       }
-      return true;
+      // 已登录且菜单已加载 → 直接放行
+      if (accessStore.isAccessChecked) {
+        return true;
+      }
+      // 已登录但菜单未加载（刷新页面场景）→ 继续执行菜单生成，不提前返回
+      if (accessStore.accessToken) {
+        // fall through to generateAccess() below
+      } else {
+        return true;
+      }
     }
 
     // accessToken 检查

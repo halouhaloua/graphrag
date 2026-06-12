@@ -1,6 +1,9 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends
+
+logger = logging.getLogger(__name__)
 from fastapi.security import OAuth2PasswordBearer
 
 from app.config import settings
@@ -71,6 +74,15 @@ async def lifespan(app: FastAPI):
             scheduler_service.set_running(False)
     else:
         yield
+
+    # 取消所有运行中的工作流任务
+    from ai_workflow.workflow.service import _running_tasks
+
+    for inst_id, task in list(_running_tasks.items()):
+        if not task.done():
+            task.cancel()
+            logger.info("Shutdown: cancelled running task for instance %s", inst_id)
+    _running_tasks.clear()
 
     await RedisClient.close()
 

@@ -285,7 +285,10 @@ class WorkflowEngine:
             for level in levels:
                 if cancel:
                     for nid in level:
-                        await WorkflowEngine._log_cancelled_node(nid, instance_id)
+                        await WorkflowEngine._log_cancelled_node(
+                            nid, instance_id,
+                            node_map[nid].get("type", ""),
+                        )
                     continue
 
                 tasks = [
@@ -411,6 +414,12 @@ class WorkflowEngine:
                     if msg:
                         resolved_params["user_question"] = msg
 
+        # 为 chat 节点注入对话历史（从 _input.chat_history 读取，避免污染 wf_def）
+        if node_type == "chat":
+            _input = node_outputs.get("_input", {})
+            if isinstance(_input, dict) and _input.get("chat_history"):
+                resolved_params["_history"] = _input["chat_history"]
+
         # 为结束节点注入上游输出汇总（排除内部 key）
         if node_type == "_end":
             upstream = {
@@ -526,13 +535,13 @@ class WorkflowEngine:
     # ── 辅助方法 ──────────────────────────────────────
 
     @staticmethod
-    async def _log_cancelled_node(node_id: str, instance_id: str):
+    async def _log_cancelled_node(node_id: str, instance_id: str, node_type: str = ""):
         """记录被取消的节点日志（使用独立 DB session）"""
         async with _async_session() as task_db:
             log = WorkflowNodeLog(
                 instance_id=instance_id,
                 node_id=node_id,
-                node_type="",
+                node_type=node_type,
                 status="cancelled",
                 started_at=datetime.now(),
                 finished_at=datetime.now(),
@@ -546,15 +555,9 @@ class WorkflowEngine:
         event: str,
         data: dict,
     ):
-        """向 SSE 流推送事件"""
-        if queue is None:
-            return
-        await queue.put(
-            {
-                "event": event,
-                "data": json.dumps(data, ensure_ascii=False),
-            }
-        )
+        from ai_workflow.events import push_event
+
+        await push_event(queue, event, data)
 
 
 def _async_session():

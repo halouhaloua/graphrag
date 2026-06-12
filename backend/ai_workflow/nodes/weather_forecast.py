@@ -29,10 +29,10 @@ class WeatherForecastNode(BaseNode):
     async def execute(
         self, params: Dict[str, Any], context: NodeContext
     ) -> Dict[str, Any]:
-        latitude = float(params.get("latitude", 0))
-        longitude = float(params.get("longitude", 0))
-        if not latitude or not longitude:
+        if "latitude" not in params or "longitude" not in params:
             raise ValueError("latitude和longitude参数不能为空")
+        latitude = float(params["latitude"])
+        longitude = float(params["longitude"])
 
         api_version = params.get("version", os.getenv("caiyun_api_version", "2.6"))
         token = params.get("token", os.getenv("caiyun_token", ""))

@@ -4,9 +4,10 @@
 使团队执行器能通过 AgentScope Toolkit 调用节点作为标准 OpenAI 工具。
 """
 
+import asyncio
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from agentscope.message import TextBlock
 from agentscope.permission import (
@@ -61,10 +62,17 @@ class NodeToolAdapter(ToolBase):
     """
 
     def __init__(
-        self, node_type: str, settings: Any, log: logging.Logger | None = None
+        self,
+        node_type: str,
+        settings: Any,
+        db: Optional[Any] = None,
+        stream_queue: Optional[asyncio.Queue] = None,
+        log: logging.Logger | None = None,
     ) -> None:
         self._node_type = node_type
         self._settings = settings
+        self._db = db
+        self._stream_queue = stream_queue
         self._log = log or logger
         meta = NodeRegistry.get_metadata(node_type) or {}
         self.name = node_type
@@ -95,11 +103,12 @@ class NodeToolAdapter(ToolBase):
         try:
             node = node_cls()
             ctx = NodeContext(
-                db=None,
+                db=self._db,
                 settings=self._settings,
                 logger=self._log,
                 node_id=self._node_type,
                 instance_id="",
+                stream_queue=self._stream_queue,
             )
             result = await node.execute(kwargs, ctx)
             return ToolChunk(

@@ -87,38 +87,22 @@ class ConversationService:
         return history
 
     @staticmethod
-    async def inject_history_into_nodes(
-        wf_def: WorkflowDef,
-        history: list[dict],
-    ) -> str:
-        """将对话历史注入工作流中 chat 节点的 ``_history`` 参数
-
-        返回修改后的 nodes JSON 字符串。
-        """
-        nodes = json.loads(wf_def.nodes)
-        for node in nodes:
-            if node.get("type") == "chat":
-                node.setdefault("params", {})["_history"] = history
-        return json.dumps(nodes, ensure_ascii=False)
-
-    @staticmethod
     async def execute_turn(
         conversation_id: str,
         message: str,
         db: AsyncSession,
         user_id: str,
         stream_queue: Optional[asyncio.Queue] = None,
-    ) -> tuple[WorkflowInstance, Optional[str]]:
+    ) -> WorkflowInstance:
         """准备一轮对话的执行
 
         1. 加载会话和工作流定义
         2. 加载历史对话
-        3. 创建 WorkflowInstance
-        4. 临时注入 history 到 chat 节点（调用方需在引擎执行后恢复节点）
+        3. 创建 WorkflowInstance，将 history 通过 input_params 传入
 
-        Returns:
-            tuple: (instance, original_nodes) — 调用方需在引擎执行后将 ``original_nodes``
-            写回工作流定义
+        Note:
+            chat 节点的 ``_history`` 由引擎自动从 ``node_outputs["_input"]["chat_history"]``
+            注入，无需修改工作流定义。
         """
         conv = await db.get(WorkflowConversation, conversation_id)
         if not conv or conv.is_deleted:
@@ -131,7 +115,8 @@ class ConversationService:
         history = await ConversationService.load_chat_history(conversation_id, db)
         turn_index = len(history) // 2 + 1
 
-        # 创建工作流实例
+        # 创建工作流实例 — chat_history 通过 input_params 传入
+        # 引擎会在执行时自动注入到 chat 节点的 _history 参数
         instance = await WorkflowEngine.create_instance(
             conv.workflow_def_id,
             {"message": message, "chat_history": history},
@@ -142,19 +127,10 @@ class ConversationService:
         instance.turn_index = turn_index
         await db.commit()
 
-        # 注入 history 到 chat 节点（临时修改）
-        original_nodes: Optional[str] = None
-        if history:
-            original_nodes = wf_def.nodes
-            wf_def.nodes = await ConversationService.inject_history_into_nodes(
-                wf_def, history
-            )
-            await db.commit()
-
         # 首次对话自动生成标题
         if not conv.title and turn_index == 1:
             conv.title = message[:80]
             await db.commit()
 
         await db.refresh(instance)
-        return instance, original_nodes
+        return instance

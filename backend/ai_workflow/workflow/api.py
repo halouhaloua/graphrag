@@ -14,6 +14,7 @@ from app.base_schema import PaginatedResponse
 from utils.security import get_current_user
 from core.user.model import User
 
+from ai_workflow.events import sse_encode
 from ai_workflow.workflow.events import WorkflowEventType
 from ai_workflow.workflow.model import WorkflowDef, WorkflowInstance, WorkflowNodeLog
 from ai_workflow.workflow.schema import (
@@ -28,10 +29,6 @@ from ai_workflow.workflow.service import WorkflowEngine
 from ai_workflow.nodes.registry import NodeRegistry
 
 router = APIRouter(tags=["AI工作流"])
-
-
-def _sse(data: dict) -> str:
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 def _serialize_nodes(nodes: list) -> str:
@@ -353,10 +350,14 @@ async def run_workflow(
     )
 
     async def _bg():
-        async with AsyncSessionLocal() as exec_db:
-            await WorkflowEngine.execute_instance(instance.id, exec_db)
+        try:
+            async with AsyncSessionLocal() as exec_db:
+                await WorkflowEngine.execute_instance(instance.id, exec_db)
+        except Exception:
+            logger.exception("后台工作流执行失败 instance_id=%s", instance.id)
 
-    asyncio.create_task(_bg())
+    task = asyncio.create_task(_bg())
+    WorkflowEngine.register_running_task(instance.id, task)
     return instance
 
 
@@ -465,7 +466,7 @@ async def stream_instance(
             try:
                 while True:
                     event = await queue.get()
-                    yield _sse(event)
+                    yield sse_encode(event)
                     if event.get("event") in (
                         WorkflowEventType.WORKFLOW_COMPLETE,
                         WorkflowEventType.WORKFLOW_ERROR,
@@ -474,7 +475,7 @@ async def stream_instance(
             except asyncio.CancelledError:
                 task.cancel()
             except Exception as e:
-                yield _sse({"event": "error", "data": str(e)})
+                yield sse_encode({"event": "error", "data": str(e)})
             finally:
                 WorkflowEngine.cancel_running_task(inst_id)
                 if not task.done():

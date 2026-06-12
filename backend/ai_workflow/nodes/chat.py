@@ -146,7 +146,12 @@ class ChatNode(BaseNode):
 
         # 有工具路径 — ReAct 循环
         adapters = [
-            NodeToolAdapter(t, settings, logger)
+            NodeToolAdapter(
+                t, settings,
+                db=context.db,
+                stream_queue=context.stream_queue,
+                log=logger,
+            )
             for t in tool_names
             if t != "chat" and NodeRegistry.get(t)
         ]
@@ -221,7 +226,13 @@ class ChatNode(BaseNode):
                     )
                 continue
 
-            # 其他情况（如 length）→ 继续
+            # 达到 max_tokens → 记录警告并继续
+            if choice.finish_reason == "length":
+                logger.warning(
+                    "ChatNode 达到 max_tokens 限制（round %d），响应可能被截断", _
+                )
             messages.append({"role": "assistant", "content": text or ""})
 
+        # 达到最大轮数仍无 stop / tool_calls → 返回已有文本
+        logger.warning("ChatNode 达到最大工具调用轮数 %d，返回已有文本", max_rounds)
         return {"result": full_text}

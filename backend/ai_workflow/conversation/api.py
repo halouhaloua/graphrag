@@ -21,17 +21,14 @@ from ai_workflow.conversation.schema import (
     TurnOut,
 )
 from ai_workflow.conversation.service import ConversationService
+from ai_workflow.events import sse_encode
 from ai_workflow.workflow.events import WorkflowEventType
-from ai_workflow.workflow.model import WorkflowDef, WorkflowInstance
+from ai_workflow.workflow.model import WorkflowInstance
 from ai_workflow.workflow.service import WorkflowEngine
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/conversations", tags=["AI工作流-会话"])
-
-
-def _sse(data: dict) -> str:
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 async def _ensure_conv_exists(conv_id: str, db: AsyncSession) -> WorkflowConversation:
@@ -94,19 +91,28 @@ async def list_conversations(
         .all()
     )
 
-    # 计算每个会话的 turn_count
+    # 一次查询获取所有会话的 turn_count
+    turn_counts = {}
+    if items:
+        conv_ids = [item.id for item in items]
+        turn_count_query = (
+            select(
+                WorkflowInstance.conversation_id,
+                func.count().label("cnt"),
+            )
+            .where(
+                WorkflowInstance.conversation_id.in_(conv_ids),
+                WorkflowInstance.is_deleted == False,  # noqa: E712
+            )
+            .group_by(WorkflowInstance.conversation_id)
+        )
+        turn_rows = (await db.execute(turn_count_query)).all()
+        turn_counts = {row[0]: row[1] for row in turn_rows}
+
     result = []
     for item in items:
-        turn_count = (
-            await db.execute(
-                select(func.count()).where(
-                    WorkflowInstance.conversation_id == item.id,
-                    WorkflowInstance.is_deleted == False,  # noqa: E712
-                )
-            )
-        ).scalar()
         conv_out = ConversationOut.model_validate(item)
-        conv_out.turn_count = turn_count or 0
+        conv_out.turn_count = turn_counts.get(item.id, 0)
         result.append(conv_out)
 
     return PaginatedResponse(items=result, total=total)
@@ -189,12 +195,10 @@ async def send_turn(
 
     async def event_generator():
         task: Optional[asyncio.Task] = None
-        original_nodes: Optional[str] = None
         instance_id: Optional[str] = None
-        wf_def_id: Optional[str] = None
         try:
             async with AsyncSessionLocal() as exec_db:
-                instance, original_nodes = await ConversationService.execute_turn(
+                instance = await ConversationService.execute_turn(
                     conversation_id=conv_id,
                     message=req.message,
                     db=exec_db,
@@ -202,7 +206,6 @@ async def send_turn(
                     stream_queue=queue,
                 )
                 instance_id = instance.id
-                wf_def_id = instance.workflow_def_id
 
                 task = asyncio.create_task(
                     WorkflowEngine.execute_instance(
@@ -213,7 +216,7 @@ async def send_turn(
 
                 while True:
                     event = await queue.get()
-                    yield _sse(event)
+                    yield sse_encode(event)
                     if event.get("event") in (
                         WorkflowEventType.WORKFLOW_COMPLETE,
                         WorkflowEventType.WORKFLOW_ERROR,
@@ -223,7 +226,7 @@ async def send_turn(
             if task and not task.done():
                 task.cancel()
         except Exception as e:
-            yield _sse(
+            yield sse_encode(
                 {
                     "event": WorkflowEventType.WORKFLOW_ERROR,
                     "data": json.dumps({"error": str(e)}),
@@ -233,16 +236,6 @@ async def send_turn(
             if task and not task.done():
                 task.cancel()
             WorkflowEngine.cancel_running_task(instance_id or "")
-            # 恢复工作流定义的原始节点（移除临时注入的 history）
-            if original_nodes is not None and wf_def_id:
-                try:
-                    async with AsyncSessionLocal() as cleanup_db:
-                        wf_def = await cleanup_db.get(WorkflowDef, wf_def_id)
-                        if wf_def:
-                            wf_def.nodes = original_nodes
-                            await cleanup_db.commit()
-                except Exception:
-                    logger.exception("恢复工作流节点定义失败")
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

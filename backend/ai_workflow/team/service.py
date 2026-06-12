@@ -88,6 +88,7 @@ class TeamExecutor:
                 context_summary=context_summary,
                 stream_queue=stream_queue,
                 team_rules=config.team_rules,
+                db=db,
             )
 
             action_type = action.get("type", "")
@@ -136,6 +137,7 @@ class TeamExecutor:
         context_summary: str,
         stream_queue: Optional[asyncio.Queue] = None,
         team_rules: str = "",
+        db: Optional[AsyncSession] = None,
     ) -> tuple[str, dict]:
         """运行单个角色直至其调用 handoff 或 final_answer
 
@@ -158,7 +160,7 @@ class TeamExecutor:
         for t in unresolved_tools:
             logger.warning("角色 %s 的工具 '%s' 未注册，已忽略", role_name, t)
         toolkit_tools: list = [
-            NodeToolAdapter(t, settings, logger)
+            NodeToolAdapter(t, settings, db=db, stream_queue=stream_queue, log=logger)
             for t in tool_names
             if t not in ("handoff", "final_answer") and NodeRegistry.get(t)
         ]
@@ -278,6 +280,13 @@ class TeamExecutor:
                     )
                 continue
 
+            # 达到 max_tokens → 记录警告
+            if choice.finish_reason == "length":
+                logger.warning(
+                    "角色 %s 达到 max_tokens 限制（iter %d），响应可能被截断",
+                    role_name, _,
+                )
+
             # 无工具调用 → 文本响应，提示继续
             messages.append({"role": "assistant", "content": text or ""})
             messages.append(
@@ -287,6 +296,8 @@ class TeamExecutor:
                 }
             )
 
+        # 达到最大迭代次数仍无 handoff/final_answer → 返回已有文本作为最终答案
+        logger.warning("角色 %s 达到最大迭代次数 %d，返回已有文本", role_name, max_iter)
         return full_text, action if action else {
             "type": "final_answer",
             "result": full_text,
@@ -298,6 +309,6 @@ class TeamExecutor:
         event: str,
         data: dict,
     ) -> None:
-        if queue is None:
-            return
-        await queue.put({"event": event, "data": json.dumps(data, ensure_ascii=False)})
+        from ai_workflow.events import push_event
+
+        await push_event(queue, event, data)
