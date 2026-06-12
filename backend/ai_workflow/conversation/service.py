@@ -72,12 +72,13 @@ class ConversationService:
                 continue
 
             user_msg = inp.get("message", "") if isinstance(inp, dict) else ""
+
+            # 从 end-1 节点提取 AI 回复（end-1 的 result 即主节点的输出文本）
             ai_reply = ""
             if isinstance(out, dict):
-                for v in out.values():
-                    if isinstance(v, str):
-                        ai_reply = v
-                        break
+                end_result = out.get("end-1")
+                if isinstance(end_result, str):
+                    ai_reply = end_result
             if user_msg:
                 history.append({"role": "user", "content": user_msg})
             if ai_reply:

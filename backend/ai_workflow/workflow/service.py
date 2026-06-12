@@ -275,6 +275,7 @@ class WorkflowEngine:
                 )
                 if isinstance(input_dict, dict):
                     node_outputs["_input"] = input_dict
+                    logger.info("[DEBUG] [%s] _input=%s", instance_id, input_dict)
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -324,10 +325,13 @@ class WorkflowEngine:
                 instance.status = "failed"
                 instance.error = "执行异常终止"
             instance.finished_at = datetime.now()
-            instance.output_result = json.dumps(
-                {k: v.get("result", v) for k, v in node_outputs.items()},
-                ensure_ascii=False,
-            )
+            output_result = {
+                k: v.get("result", v) if isinstance(v, dict) else v
+                for k, v in node_outputs.items()
+                if not k.startswith("_")
+            }
+            instance.output_result = json.dumps(output_result, ensure_ascii=False)
+            logger.info("[DEBUG] [%s] output_result=%s", instance_id, output_result)
             await db.commit()
 
         if instance.status == "failed":
@@ -336,6 +340,7 @@ class WorkflowEngine:
                 WorkflowEventType.WORKFLOW_ERROR,
                 {"instance_id": instance_id, "error": instance.error},
             )
+            logger.info("[DEBUG] [%s] status=failed error=%s", instance_id, instance.error)
         else:
             await WorkflowEngine._push_event(
                 stream_queue,
@@ -346,6 +351,7 @@ class WorkflowEngine:
                     "result": instance.output_result,
                 },
             )
+            logger.info("[DEBUG] [%s] status=completed", instance_id)
 
     # ── 单节点执行（独立 DB session）──────────────────
 
@@ -380,15 +386,53 @@ class WorkflowEngine:
         node_type = node_def.get("type", "")
         raw_params = node_def.get("params", {})
         resolved_params = WorkflowEngine.resolve_params(raw_params, node_outputs)
+        logger.info(
+            "[DEBUG] [%s] %s(%s) params=%s",
+            instance_id, node_id, node_type, resolved_params,
+        )
 
-        # 为结束节点注入上游输出汇总
+        # 为开始节点注入 _input，使其能输出用户消息
+        if node_type == "_start" and "_input" in node_outputs:
+            resolved_params["_input"] = node_outputs["_input"]
+
+        # chat 节点 user_question 为空时，自动从上游 _start 节点取用户输入
+        if node_type == "chat" and not resolved_params.get("user_question"):
+            for nid in sorted(node_outputs.keys()):
+                if nid.startswith("start"):
+                    out = node_outputs.get(nid, {})
+                    val = out.get("result", "") if isinstance(out, dict) else str(out)
+                    if val:
+                        resolved_params["user_question"] = val
+                        break
+            if not resolved_params.get("user_question"):
+                _input = node_outputs.get("_input", {})
+                if isinstance(_input, dict):
+                    msg = _input.get("message", "")
+                    if msg:
+                        resolved_params["user_question"] = msg
+
+        # 为结束节点注入上游输出汇总（排除内部 key）
         if node_type == "_end":
             upstream = {
                 k: v.get("result", v) if isinstance(v, dict) else v
                 for k, v in node_outputs.items()
-                if k != node_id
+                if k != node_id and not k.startswith("_")
             }
             resolved_params["_upstream_outputs"] = upstream
+
+            # 找到主输出节点（最后一个非 _ 开头的节点），将其 result 注入
+            main_node_id = None
+            for nid in reversed(list(node_outputs.keys())):
+                if not nid.startswith("_"):
+                    main_node_id = nid
+                    break
+            if main_node_id:
+                main_out = node_outputs.get(main_node_id, {})
+                resolved_params["_main_node_result"] = (
+                    main_out.get("result", main_out)
+                    if isinstance(main_out, dict)
+                    else main_out
+                )
 
         node_cls = NodeRegistry.get(node_type)
         if not node_cls:
@@ -438,10 +482,20 @@ class WorkflowEngine:
                 node_log.finished_at = datetime.now()
                 await task_db.commit()
 
+                event_data: dict[str, Any] = {
+                    "node_id": node_id,
+                    "duration_ms": duration,
+                }
+                if isinstance(result, dict) and result.get("error"):
+                    event_data["error"] = result["error"]
                 await WorkflowEngine._push_event(
                     stream_queue,
                     WorkflowEventType.NODE_COMPLETE,
-                    {"node_id": node_id, "duration_ms": duration},
+                    event_data,
+                )
+                logger.info(
+                    "[DEBUG] [%s] %s(%s) result=%s",
+                    instance_id, node_id, node_type, result,
                 )
                 return result
 

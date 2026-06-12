@@ -261,25 +261,23 @@ export function useWorkflowEditor(workflowId: string) {
       return;
     }
 
+    if (workflow.value.workflow_type === 'app_workflow') {
+      if (workflow.value.workflow_route) {
+        window.open(`/wf/app/${workflow.value.workflow_route}`, '_blank');
+        return;
+      }
+      ElMessage.warning('应用工作流未配置路由');
+      return;
+    }
+
     let inputParams: Record<string, any> | undefined;
     try {
-      if (workflow.value.workflow_type === 'ai_workflow') {
-        const { value } = await ElMessageBox.prompt(
-          '请输入消息内容', '运行工作流',
-          { inputType: 'textarea', inputPlaceholder: '输入您的问题...', inputValue: '' },
-        );
-        if (value !== null && value !== '') {
-          inputParams = { message: value };
-        }
-      } else {
-        const { value } = await ElMessageBox.prompt(
-          '请输入参数（JSON格式）', '运行工作流',
-          { inputValue: '{}', inputPlaceholder: '{"key": "value"}' },
-        );
-        if (value !== null) {
-          try { inputParams = JSON.parse(value); }
-          catch { ElMessage.warning('JSON 格式无效'); return; }
-        }
+      const { value } = await ElMessageBox.prompt(
+        '请输入消息内容', '运行工作流',
+        { inputType: 'textarea', inputPlaceholder: '输入您的问题...', inputValue: '' },
+      );
+      if (value !== null && value !== '') {
+        inputParams = { message: value };
       }
     } catch {
       return; // 取消操作

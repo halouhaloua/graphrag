@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  sandbox:
+    container_name: proteus-sandbox
+    image: proteus-sandbox 
+    ports:
+      - "8000:8000"
+    volumes:
+      - .env:/app/.env
+      - ./logs:/var/log/sandbox
+      - ./data:/var/data/sandbox
+    environment:
+      - PYTHONUNBUFFERED=1

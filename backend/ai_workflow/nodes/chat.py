@@ -130,7 +130,19 @@ class ChatNode(BaseNode):
                     text = completion.choices[0].message.content or ""
                     return {"result": text}
             except Exception as e:
-                return {"result": "", "error": f"LLM 调用失败: {e}"}
+                error_msg = f"LLM 调用失败: {e}"
+                logger.error(error_msg)
+                # 将错误文本推送到 SSE 流，让前端显示
+                if context.stream_queue:
+                    await WorkflowEngine._push_event(
+                        context.stream_queue,
+                        WorkflowEventType.NODE_OUTPUT,
+                        {
+                            "node_id": context.node_id,
+                            "token": f"\n\n[错误: {error_msg}]",
+                        },
+                    )
+                return {"result": "", "error": error_msg}
 
         # 有工具路径 — ReAct 循环
         adapters = [

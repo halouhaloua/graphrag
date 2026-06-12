@@ -92,6 +92,20 @@ const coreRoutes: RouteRecordRaw[] = [
     component: () => import('#/views/_core/ai-workflow/team/detail.vue'),
     meta: { hideInMenu: true, hideInTab: true, title: '团队编辑器' },
   },
+  // AI 工作流对话页面（全屏，不使用 BasicLayout）
+  {
+    name: 'AiWorkflowChat',
+    path: '/wf/ai/:route',
+    component: () => import('#/views/workflow-run/ai-chat.vue'),
+    meta: { hideInMenu: true, hideInTab: true, title: 'AI 工作流' },
+  },
+  // 应用工作流工作台页面（全屏，不使用 BasicLayout）
+  {
+    name: 'AppWorkflowWorkspace',
+    path: '/wf/app/:route',
+    component: () => import('#/views/workflow-run/app-workspace.vue'),
+    meta: { hideInMenu: true, hideInTab: true, title: '应用工作流' },
+  },
   {
     component: AuthPageLayout,
     meta: {

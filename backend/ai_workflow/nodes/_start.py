@@ -28,4 +28,6 @@ class StartNode(BaseNode):
     async def execute(
         self, params: Dict[str, Any], context: NodeContext
     ) -> Dict[str, Any]:
-        return {"result": "start", "success": True}
+        _input = params.get("_input", {})
+        msg = _input.get("message", "") if isinstance(_input, dict) else ""
+        return {"result": msg or "start", "success": True}

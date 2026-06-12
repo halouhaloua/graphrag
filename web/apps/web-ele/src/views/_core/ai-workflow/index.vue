@@ -101,6 +101,14 @@ const handleView = (wf: WorkflowDef) => {
 
 // 执行
 const handleRun = async (wf: WorkflowDef) => {
+  if (wf.workflow_type === 'app_workflow') {
+    if (wf.workflow_route) {
+      router.push(`/wf/app/${wf.workflow_route}`);
+      return;
+    }
+    ElMessage.warning('应用工作流未配置路由');
+    return;
+  }
   try {
     await runWorkflowApi(wf.id);
     ElMessage.success(`工作流 "${wf.name}" 已启动执行`);

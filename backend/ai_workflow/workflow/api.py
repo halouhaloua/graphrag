@@ -79,6 +79,24 @@ async def _ensure_instance_exists(inst_id: str, db: AsyncSession) -> WorkflowIns
     return inst
 
 
+async def _check_route_unique(
+    db: AsyncSession, route: str, exclude_id: Optional[str] = None
+) -> None:
+    """检查 workflow_route 是否唯一，不唯一则抛 409"""
+    query = select(WorkflowDef).where(
+        WorkflowDef.workflow_route == route,
+        WorkflowDef.is_deleted == False,  # noqa: E712
+    )
+    if exclude_id:
+        query = query.where(WorkflowDef.id != exclude_id)
+    existing = (await db.execute(query)).scalar_one_or_none()
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f'路由标识 "{route}" 已被占用，请更换',
+        )
+
+
 # ─── 工作流定义 CRUD ───────────────────────────────
 
 
@@ -97,6 +115,9 @@ async def create_workflow_def(
     )
     if not ok:
         raise HTTPException(status_code=400, detail=f"工作流无效: {err}")
+
+    if data.workflow_route:
+        await _check_route_unique(db, data.workflow_route)
 
     wf_def = WorkflowDef(
         name=data.name,
@@ -207,6 +228,9 @@ async def update_workflow_def(
             json.dumps(val, ensure_ascii=False) if val else None
         )
 
+    if "workflow_route" in update_data and update_data["workflow_route"]:
+        await _check_route_unique(db, update_data["workflow_route"], exclude_id=def_id)
+
     for key, value in update_data.items():
         setattr(wf_def, key, value)
 
@@ -223,6 +247,7 @@ async def delete_workflow_def(
 ):
     wf_def = await _ensure_def_exists(def_id, db)
     wf_def.is_deleted = True
+    wf_def.workflow_route = None
     await db.commit()
     return {"message": "已删除"}
 

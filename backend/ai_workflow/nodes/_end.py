@@ -15,19 +15,30 @@ from ai_workflow.nodes.registry import register_node
                 "default": {},
                 "description": "上游节点输出汇总（由引擎自动注入）",
             },
+            "_main_node_result": {
+                "type": "any",
+                "default": None,
+                "description": "主输出节点结果（由引擎自动注入）",
+            },
         },
-        "output": {"result": "上游节点输出汇总结果", "success": "是否成功"},
+        "output": {"result": "上游主节点输出", "success": "是否成功"},
     },
 )
 class EndNode(BaseNode):
     """工作流结束节点
 
-    接收引擎注入的 ``_upstream_outputs`` 并将上游节点输出合并为最终结果。
+    接收引擎注入的 ``_main_node_result`` 并将主输出节点的结果作为最终结果返回。
     """
 
     async def execute(
         self, params: Dict[str, Any], context: NodeContext
     ) -> Dict[str, Any]:
+        main_result = params.get("_main_node_result")
+
+        # 有主节点结果 → 直接返回（chat 或工具节点均可）
+        if main_result is not None:
+            return {"result": main_result, "success": True}
+
+        # fallback: 返回全量上游输出
         upstream = params.get("_upstream_outputs", {})
-        # 取最后一个非 _end 节点的 result 作为主结果，同时保留全部上游输出
         return {"result": upstream, "success": True}
