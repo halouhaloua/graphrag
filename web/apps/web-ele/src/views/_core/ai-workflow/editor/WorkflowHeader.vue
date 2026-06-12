@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import type { WorkflowDef } from '#/api/core/ai-workflow';
 
-import { ArrowLeft, Play, Send } from '@vben/icons';
+import { ArrowLeft, Copy, Play, Send } from '@vben/icons';
 import {
   ElButton,
-  ElInput,
   ElMessage,
   ElTag,
   ElTooltip,
@@ -35,6 +34,14 @@ function handleRun() {
   }
   emit('run');
 }
+
+function copyAccessUrl() {
+  if (!props.workflow?.workflow_route) return;
+  const prefix = props.workflow.workflow_type === 'ai_workflow' ? 'ai' : 'app';
+  const url = `/wf/${prefix}/${props.workflow.workflow_route}`;
+  navigator.clipboard.writeText(window.location.origin + url);
+  ElMessage.success('访问链接已复制');
+}
 </script>
 
 <template>
@@ -48,12 +55,29 @@ function handleRun() {
       <div class="workflow-header__title-text">
         {{ workflow?.name || '未命名工作流' }}
       </div>
+      <ElTag
+        :type="workflow?.workflow_type === 'ai_workflow' ? 'primary' : 'warning'"
+        size="small"
+        effect="light"
+      >
+        {{ workflow?.workflow_type === 'ai_workflow' ? 'AI' : '应用' }}
+      </ElTag>
       <ElTag v-if="workflow?.is_published" type="success" size="small" effect="dark">
         已发布
       </ElTag>
       <ElTag v-else type="warning" size="small" effect="dark">
         未发布
       </ElTag>
+      <template v-if="workflow?.is_published && workflow?.workflow_route">
+        <ElTag size="small" type="info" effect="plain" class="route-tag">
+          /{{ workflow.workflow_type === 'ai_workflow' ? 'ai' : 'app' }}/{{ workflow.workflow_route }}
+        </ElTag>
+        <ElTooltip content="复制访问链接" placement="bottom">
+          <ElButton text size="small" @click="copyAccessUrl">
+            <Copy class="h-3.5 w-3.5" />
+          </ElButton>
+        </ElTooltip>
+      </template>
     </div>
 
     <div class="workflow-header__right">
@@ -124,5 +148,10 @@ function handleRun() {
   padding: 0 8px;
   line-height: 28px; /* 和 small 尺寸输入框高度对齐 */
   cursor: pointer;
+}
+
+.route-tag {
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-size: 10px;
 }
 </style>

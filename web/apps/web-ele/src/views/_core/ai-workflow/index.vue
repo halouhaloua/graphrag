@@ -154,6 +154,12 @@ const handleSizeChange = (size: number) => {
   loadList();
 };
 
+function copyRoute(wf: WorkflowDef) {
+  const url = `/wf/${wf.workflow_type === 'ai_workflow' ? 'ai' : 'app'}/${wf.workflow_route}`;
+  navigator.clipboard.writeText(window.location.origin + url);
+  ElMessage.success('链接已复制');
+}
+
 function formatTime(dateStr?: string): string {
   if (!dateStr) return '';
   try {
@@ -250,8 +256,25 @@ onMounted(() => {
 
           <!-- 标签 -->
           <div class="card-status-row">
+            <ElTag
+              :type="wf.workflow_type === 'ai_workflow' ? 'primary' : 'warning'"
+              size="small"
+              effect="light"
+            >
+              {{ wf.workflow_type === 'ai_workflow' ? 'AI' : '应用' }}
+            </ElTag>
             <ElTag :type="wf.is_published ? 'success' : 'info'" size="small" effect="light">
               {{ wf.is_published ? '已发布' : '未发布' }}
+            </ElTag>
+            <ElTag
+              v-if="wf.is_published && wf.workflow_route"
+              size="small"
+              type="info"
+              effect="plain"
+              class="route-tag"
+              @click.stop="copyRoute(wf)"
+            >
+              /{{ wf.workflow_type === 'ai_workflow' ? 'ai' : 'app' }}/{{ wf.workflow_route }}
             </ElTag>
           </div>
 
@@ -422,6 +445,17 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+.route-tag {
+  cursor: pointer;
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-size: 10px;
+}
+
+.route-tag:hover {
+  color: var(--el-color-primary);
 }
 
 .card-footer {

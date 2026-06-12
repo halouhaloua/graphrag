@@ -17,10 +17,10 @@ export const NODE_TYPE_MAP: Record<string, NodeTypeMeta> = {
     icon: 'circle-play',
     color: '#22c55e',
     category: 'flow',
-    description: '工作流起点',
+    description: '工作流起点，接收用户输入',
     inputs: 0,
     outputs: 1,
-    defaultParams: {},
+    defaultParams: { user_input_description: '' },
   },
   _end: {
     type: '_end',
@@ -42,7 +42,7 @@ export const NODE_TYPE_MAP: Record<string, NodeTypeMeta> = {
     description: '调用大语言模型进行对话',
     inputs: 1,
     outputs: 1,
-    defaultParams: { temperature: 0.7, system_prompt: '', user_question: '', tools: [], max_tool_rounds: 10 },
+    defaultParams: { temperature: 0.7, system_prompt: '', user_question: '${_input.message}', tools: [], max_tool_rounds: 10 },
   },
   serper_search: {
     type: 'serper_search',

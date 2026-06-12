@@ -302,8 +302,22 @@ function updateParam(key: string, value: any) {
         </div>
       </template>
 
-      <template v-else-if="meta?.type === '_start' || meta?.type === '_end'">
-        <div class="cfg-empty">流程控制节点，无需配置参数</div>
+      <template v-else-if="meta?.type === '_start'">
+        <div class="cfg-section">
+          <div class="cfg-section__label">用户输入提示</div>
+          <ElInput
+            :model-value="localParams.user_input_description"
+            size="small"
+            placeholder="例如：请输入您的问题"
+            @update:model-value="updateParam('user_input_description', $event)"
+          />
+          <div class="cfg-section__hint">
+            此提示将在工作流运行页面的输入框中显示，不填则不显示。
+          </div>
+        </div>
+      </template>
+      <template v-else-if="meta?.type === '_end'">
+        <div class="cfg-empty">此节点无可配置参数</div>
       </template>
 
       <template v-else>
@@ -430,6 +444,13 @@ function updateParam(key: string, value: any) {
   color: #94a3b8;
   font-size: 12px;
   padding: 20px 0;
+}
+
+.cfg-section__hint {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 4px;
+  line-height: 1.4;
 }
 .cfg-delete {
   margin-top: 24px;

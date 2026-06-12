@@ -3,13 +3,14 @@ import type { Edge, Node } from '@vue-flow/core';
 import { nanoid } from 'nanoid';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 
 import {
   getWorkflowDefDetailApi,
   publishWorkflowDefApi,
   runWorkflowApi,
   updateWorkflowDefApi,
+  type PublishResult,
   type WorkflowDef,
   type WorkflowDefEdge,
   type WorkflowDefNode,
@@ -20,21 +21,44 @@ import { getNodeMeta } from '../nodes/index';
 
 const DEFAULT_NODE_POSITION = { x: 250, y: 200 };
 
-function createDefaultWorkflowNodes(): Node[] {
-  return [
+function createDefaultWorkflowNodes(workflowType?: string): Node[] {
+  const nodes: Node[] = [
     {
       id: 'start-1',
       type: 'workflow',
       position: { x: 100, y: 250 },
       data: { type: '_start', label: '开始', params: {}, status: '' },
     },
-    {
-      id: 'end-1',
-      type: 'workflow',
-      position: { x: 700, y: 250 },
-      data: { type: '_end', label: '结束', params: {}, status: '' },
-    },
   ];
+
+  if (workflowType === 'ai_workflow') {
+    nodes.push({
+      id: `chat-${nanoid(6)}`,
+      type: 'workflow',
+      position: { x: 350, y: 250 },
+      data: {
+        type: 'chat',
+        label: 'LLM对话',
+        params: {
+          user_question: '${_input.message}',
+          temperature: 0.7,
+          system_prompt: '',
+          tools: [],
+          max_tool_rounds: 10,
+        },
+        status: '',
+      },
+    });
+  }
+
+  nodes.push({
+    id: 'end-1',
+    type: 'workflow',
+    position: { x: workflowType === 'ai_workflow' ? 600 : 400, y: 250 },
+    data: { type: '_end', label: '结束', params: {}, status: '' },
+  });
+
+  return nodes;
 }
 
 function toFlowNode(n: WorkflowDefNode): Node {
@@ -110,6 +134,8 @@ export function useWorkflowEditor(workflowId: string) {
           id: '',
           name: '新建工作流',
           description: '',
+          workflow_type: 'ai_workflow',
+          workflow_route: '',
           nodes: [],
           edges: [],
           global_params: null,
@@ -118,7 +144,7 @@ export function useWorkflowEditor(workflowId: string) {
           sort: 0,
           is_deleted: false,
         };
-        nodes.value = createDefaultWorkflowNodes();
+        nodes.value = createDefaultWorkflowNodes('ai_workflow');
         edges.value = [];
         store.initWorkflow('', { nodes: nodes.value, edges: edges.value });
         initialized.value = true;
@@ -132,7 +158,7 @@ export function useWorkflowEditor(workflowId: string) {
         nodes.value = def.nodes.map(toFlowNode);
         edges.value = def.edges.map(toFlowEdge);
       } else {
-        nodes.value = createDefaultWorkflowNodes();
+        nodes.value = createDefaultWorkflowNodes(def.workflow_type);
         edges.value = [];
       }
 
@@ -155,6 +181,8 @@ export function useWorkflowEditor(workflowId: string) {
         await updateWorkflowDefApi(workflow.value.id, {
           name: workflow.value.name,
           description: workflow.value.description,
+          workflow_type: workflow.value.workflow_type,
+          workflow_route: workflow.value.workflow_route,
           nodes: flowNodes,
           edges: flowEdges,
         });
@@ -179,6 +207,8 @@ export function useWorkflowEditor(workflowId: string) {
       await updateWorkflowDefApi(workflow.value.id, {
         name: workflow.value.name,
         description: workflow.value.description,
+        workflow_type: workflow.value.workflow_type,
+        workflow_route: workflow.value.workflow_route,
         nodes: flowNodes,
         edges: flowEdges,
       });
@@ -207,9 +237,18 @@ export function useWorkflowEditor(workflowId: string) {
       return;
     }
     try {
-      await publishWorkflowDefApi(workflow.value.id, publishFlag);
-      workflow.value.is_published = publishFlag;
-      ElMessage.success(publishFlag ? '已发布' : '已取消发布');
+      const res = await publishWorkflowDefApi(workflow.value.id, publishFlag) as unknown as PublishResult;
+      workflow.value.is_published = res.is_published;
+      if (res.workflow_route) {
+        workflow.value.workflow_route = res.workflow_route;
+      }
+      if (res.workflow_type) {
+        workflow.value.workflow_type = res.workflow_type as 'ai_workflow' | 'app_workflow';
+      }
+      const msg = publishFlag
+        ? (res.access_url ? `已发布，访问路径: ${res.access_url}` : '已发布')
+        : '已取消发布';
+      ElMessage.success(msg);
     } catch {
       ElMessage.error('操作失败');
     }
@@ -221,8 +260,33 @@ export function useWorkflowEditor(workflowId: string) {
       ElMessage.warning('请先发布工作流');
       return;
     }
+
+    let inputParams: Record<string, any> | undefined;
     try {
-      const inst = await runWorkflowApi(workflow.value.id);
+      if (workflow.value.workflow_type === 'ai_workflow') {
+        const { value } = await ElMessageBox.prompt(
+          '请输入消息内容', '运行工作流',
+          { inputType: 'textarea', inputPlaceholder: '输入您的问题...', inputValue: '' },
+        );
+        if (value !== null && value !== '') {
+          inputParams = { message: value };
+        }
+      } else {
+        const { value } = await ElMessageBox.prompt(
+          '请输入参数（JSON格式）', '运行工作流',
+          { inputValue: '{}', inputPlaceholder: '{"key": "value"}' },
+        );
+        if (value !== null) {
+          try { inputParams = JSON.parse(value); }
+          catch { ElMessage.warning('JSON 格式无效'); return; }
+        }
+      }
+    } catch {
+      return; // 取消操作
+    }
+
+    try {
+      const inst = await runWorkflowApi(workflow.value.id, inputParams);
       ElMessage.success(`工作流已启动，实例ID: ${inst.id}`);
     } catch {
       ElMessage.error('启动失败');

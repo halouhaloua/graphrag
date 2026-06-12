@@ -59,7 +59,9 @@ const paramSummary = computed(() => {
 
     <div class="workflow-node__body">
       <template v-if="props.data?.type === '_start'">
-        <div class="workflow-node__desc">工作流开始</div>
+        <div class="workflow-node__desc">
+          {{ props.data?.params?.user_input_description || '接收用户输入' }}
+        </div>
       </template>
       <template v-else-if="props.data?.type === '_end'">
         <div class="workflow-node__desc">工作流结束</div>

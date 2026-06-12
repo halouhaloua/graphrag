@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -51,6 +52,19 @@ def _serialize_edges(edges: list) -> str:
     )
 
 
+def _auto_generate_route(name: str) -> str:
+    """从工作流名称自动生成路由标识"""
+    s = re.sub(r"[^\w]", "-", name.lower())
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s[:80] or "workflow"
+
+
+def _build_access_url(route: str, wf_type: str) -> str:
+    """构建工作流访问 URL"""
+    prefix = "ai" if wf_type == "ai_workflow" else "app"
+    return f"/wf/{prefix}/{route}"
+
+
 async def _ensure_def_exists(def_id: str, db: AsyncSession) -> WorkflowDef:
     wf_def = await db.get(WorkflowDef, def_id)
     if not wf_def or wf_def.is_deleted:
@@ -87,6 +101,8 @@ async def create_workflow_def(
     wf_def = WorkflowDef(
         name=data.name,
         description=data.description,
+        workflow_type=data.workflow_type,
+        workflow_route=data.workflow_route,
         nodes=nodes_raw,
         edges=edges_raw,
         global_params=json.dumps(data.global_params, ensure_ascii=False)
@@ -227,9 +243,63 @@ async def publish_workflow_def(
         if not ok:
             raise HTTPException(status_code=400, detail=f"工作流无效，无法发布: {err}")
 
+        # 自动生成路由
+        if not wf_def.workflow_route:
+            route = _auto_generate_route(wf_def.name)
+            # 校验唯一性，冲突则追加 id 后缀
+            existing = (
+                await db.execute(
+                    select(WorkflowDef).where(
+                        WorkflowDef.workflow_route == route,
+                        WorkflowDef.id != def_id,
+                        WorkflowDef.is_deleted == False,  # noqa: E712
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing:
+                route = f"{route}-{wf_def.id[:8]}"
+            wf_def.workflow_route = route
+
     wf_def.is_published = publish
     await db.commit()
-    return {"message": "已发布" if publish else "已取消发布", "is_published": publish}
+    await db.refresh(wf_def)
+
+    return {
+        "message": "已发布" if publish else "已取消发布",
+        "is_published": publish,
+        "workflow_route": wf_def.workflow_route if publish else None,
+        "access_url": _build_access_url(wf_def.workflow_route, wf_def.workflow_type)
+        if publish and wf_def.workflow_route
+        else None,
+        "workflow_type": wf_def.workflow_type,
+    }
+
+
+# ─── 按路由访问 ──────────────────────────────────
+
+
+@router.get(
+    "/route/{route}",
+    response_model=WorkflowDefOut,
+    summary="按路由标识获取已发布工作流",
+)
+async def get_published_by_route(
+    route: str,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """根据 ``workflow_route`` 查询已发布的工作流定义"""
+    result = await db.execute(
+        select(WorkflowDef).where(
+            WorkflowDef.workflow_route == route,
+            WorkflowDef.is_published == True,  # noqa: E712
+            WorkflowDef.is_deleted == False,  # noqa: E712
+        )
+    )
+    wf_def = result.scalar_one_or_none()
+    if not wf_def:
+        raise HTTPException(status_code=404, detail="工作流不存在或未发布")
+    return wf_def
 
 
 # ─── 工作流执行 ────────────────────────────────────

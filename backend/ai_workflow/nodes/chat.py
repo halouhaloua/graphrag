@@ -15,6 +15,8 @@ from openai import AsyncOpenAI
 from ai_workflow.nodes.base import BaseNode, NodeContext
 from ai_workflow.nodes.registry import register_node, NodeRegistry
 from ai_workflow.team.tool_adapter import NodeToolAdapter
+from ai_workflow.workflow.events import WorkflowEventType
+from ai_workflow.workflow.service import WorkflowEngine
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,11 @@ logger = logging.getLogger(__name__)
                 "default": 10,
                 "description": "最大工具调用轮数",
             },
+            "_history": {
+                "type": "list",
+                "default": [],
+                "description": "对话历史记录（由引擎自动注入，无需手动填写）",
+            },
         },
         "output": {"result": "LLM响应文本"},
     },
@@ -84,18 +91,44 @@ class ChatNode(BaseNode):
         messages: list[dict] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
+
+        # 插入对话历史（由 conversation 模块或引擎注入）
+        history: list[dict] = params.get("_history", []) or []
+        for h in history:
+            if isinstance(h, dict) and "role" in h and "content" in h:
+                messages.append({"role": h["role"], "content": h["content"]})
+
         messages.append({"role": "user", "content": user_question})
 
-        # 无工具路径 — 原始单次调用
+        # 无工具路径 — 流式输出
         if not tool_names:
             try:
-                completion = await client.chat.completions.create(
-                    model=settings.LLM_MODEL,
-                    messages=messages,
-                    temperature=temperature,
-                )
-                text = completion.choices[0].message.content or ""
-                return {"result": text}
+                if context.stream_queue:
+                    stream = await client.chat.completions.create(
+                        model=settings.LLM_MODEL,
+                        messages=messages,
+                        temperature=temperature,
+                        stream=True,
+                    )
+                    full_text = ""
+                    async for chunk in stream:
+                        token = chunk.choices[0].delta.content or ""
+                        if token:
+                            full_text += token
+                            await WorkflowEngine._push_event(
+                                context.stream_queue,
+                                WorkflowEventType.NODE_OUTPUT,
+                                {"node_id": context.node_id, "token": token},
+                            )
+                    return {"result": full_text}
+                else:
+                    completion = await client.chat.completions.create(
+                        model=settings.LLM_MODEL,
+                        messages=messages,
+                        temperature=temperature,
+                    )
+                    text = completion.choices[0].message.content or ""
+                    return {"result": text}
             except Exception as e:
                 return {"result": "", "error": f"LLM 调用失败: {e}"}
 
@@ -105,7 +138,9 @@ class ChatNode(BaseNode):
             for t in tool_names
             if t != "chat" and NodeRegistry.get(t)
         ]
-        unresolved = [t for t in tool_names if t not in ("chat",) and not NodeRegistry.get(t)]
+        unresolved = [
+            t for t in tool_names if t not in ("chat",) and not NodeRegistry.get(t)
+        ]
         for t in unresolved:
             logger.warning("ChatNode 工具 '%s' 未注册，已忽略", t)
 
@@ -165,11 +200,13 @@ class ChatNode(BaseNode):
                             tool_text = json.dumps(
                                 {"error": str(e)}, ensure_ascii=False
                             )
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": tool_text,
-                    })
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": tool_text,
+                        }
+                    )
                 continue
 
             # 其他情况（如 length）→ 继续

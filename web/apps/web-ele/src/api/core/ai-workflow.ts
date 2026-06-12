@@ -28,6 +28,8 @@ export interface WorkflowDef {
   id: string;
   name: string;
   description?: string;
+  workflow_type: 'ai_workflow' | 'app_workflow';
+  workflow_route?: string;
   nodes: WorkflowDefNode[];
   edges: WorkflowDefEdge[];
   global_params?: any;
@@ -49,6 +51,8 @@ export interface WorkflowDefListResult {
 export interface WorkflowDefCreateData {
   name: string;
   description?: string;
+  workflow_type?: string;
+  workflow_route?: string;
   nodes?: WorkflowDefNode[];
   edges?: WorkflowDefEdge[];
 }
@@ -90,9 +94,18 @@ export async function deleteWorkflowDefApi(id: string) {
   return requestClient.delete(`/api/ai-workflow/defs/${id}`);
 }
 
+/** 发布响应 */
+export interface PublishResult {
+  message: string;
+  is_published: boolean;
+  workflow_route?: string;
+  access_url?: string;
+  workflow_type: string;
+}
+
 /** 发布/取消发布工作流 */
 export async function publishWorkflowDefApi(id: string, publish = true) {
-  return requestClient.post(
+  return requestClient.post<PublishResult>(
     `/api/ai-workflow/defs/${id}/publish?publish=${publish}`,
   );
 }

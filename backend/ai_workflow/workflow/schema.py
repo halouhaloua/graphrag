@@ -30,6 +30,12 @@ class WorkflowDefCreate(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=200, description="工作流名称")
     description: Optional[str] = Field(None, description="描述")
+    workflow_type: str = Field(
+        default="ai_workflow", description="工作流类型: ai_workflow / app_workflow"
+    )
+    workflow_route: Optional[str] = Field(
+        None, description="路由标识，不填发布时自动生成"
+    )
     nodes: list[WorkflowDefNodeSchema] = Field(
         default_factory=list, description="节点列表"
     )
@@ -46,6 +52,10 @@ class WorkflowDefUpdate(BaseModel):
         None, min_length=1, max_length=200, description="工作流名称"
     )
     description: Optional[str] = Field(None, description="描述")
+    workflow_type: Optional[str] = Field(
+        None, description="工作流类型: ai_workflow / app_workflow"
+    )
+    workflow_route: Optional[str] = Field(None, description="路由标识")
     nodes: Optional[list[WorkflowDefNodeSchema]] = Field(None, description="节点列表")
     edges: Optional[list[WorkflowDefEdgeSchema]] = Field(None, description="边列表")
     global_params: Optional[dict] = Field(None, description="全局参数")
@@ -58,6 +68,8 @@ class WorkflowDefOut(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
+    workflow_type: str = "ai_workflow"
+    workflow_route: Optional[str] = None
     nodes: list[WorkflowDefNodeSchema]
     edges: list[WorkflowDefEdgeSchema]
     global_params: Optional[Any] = None
@@ -87,6 +99,8 @@ class WorkflowInstanceOut(BaseModel):
     input_params: Optional[Any] = None
     output_result: Optional[Any] = None
     error: Optional[str] = None
+    conversation_id: Optional[str] = None
+    turn_index: Optional[int] = None
     started_at: Optional[CSTDatetime] = None
     finished_at: Optional[CSTDatetime] = None
     sort: int = 0

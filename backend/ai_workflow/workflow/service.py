@@ -264,6 +264,20 @@ class WorkflowEngine:
         await db.commit()
 
         node_outputs: dict[str, dict] = {}
+
+        # 将实例的 input_params 注入变量解析上下文，支持 ${_input.xxx} 引用
+        if instance.input_params:
+            try:
+                input_dict = (
+                    json.loads(instance.input_params)
+                    if isinstance(instance.input_params, str)
+                    else instance.input_params
+                )
+                if isinstance(input_dict, dict):
+                    node_outputs["_input"] = input_dict
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         cancel = False
 
         try:
@@ -326,7 +340,11 @@ class WorkflowEngine:
             await WorkflowEngine._push_event(
                 stream_queue,
                 WorkflowEventType.WORKFLOW_COMPLETE,
-                {"instance_id": instance_id, "status": instance.status},
+                {
+                    "instance_id": instance_id,
+                    "status": instance.status,
+                    "result": instance.output_result,
+                },
             )
 
     # ── 单节点执行（独立 DB session）──────────────────
@@ -362,6 +380,15 @@ class WorkflowEngine:
         node_type = node_def.get("type", "")
         raw_params = node_def.get("params", {})
         resolved_params = WorkflowEngine.resolve_params(raw_params, node_outputs)
+
+        # 为结束节点注入上游输出汇总
+        if node_type == "_end":
+            upstream = {
+                k: v.get("result", v) if isinstance(v, dict) else v
+                for k, v in node_outputs.items()
+                if k != node_id
+            }
+            resolved_params["_upstream_outputs"] = upstream
 
         node_cls = NodeRegistry.get(node_type)
         if not node_cls:

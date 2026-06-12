@@ -11,6 +11,19 @@ class WorkflowDef(BaseModel):
 
     name = Column(String(200), nullable=False, index=True, comment="工作流名称")
     description = Column(Text, nullable=True, comment="描述")
+    workflow_type = Column(
+        String(20),
+        nullable=False,
+        default="ai_workflow",
+        index=True,
+        comment="类型: ai_workflow / app_workflow",
+    )
+    workflow_route = Column(
+        String(100),
+        nullable=True,
+        unique=True,
+        comment="路由标识符（发布后通过此路径访问，唯一）",
+    )
     nodes = Column(
         Text, nullable=False, comment="节点定义 JSON: [{id, type, params, position}]"
     )
@@ -45,6 +58,14 @@ class WorkflowInstance(BaseModel):
     input_params = Column(Text, nullable=True, comment="输入参数 JSON")
     output_result = Column(Text, nullable=True, comment="最终输出结果 JSON")
     error = Column(Text, nullable=True, comment="错误信息")
+    conversation_id = Column(
+        String(21),
+        ForeignKey("ai_workflow_conversation.id"),
+        nullable=True,
+        index=True,
+        comment="所属会话ID（多轮对话时使用）",
+    )
+    turn_index = Column(Integer, nullable=True, comment="会话中的轮次序号")
     started_at = Column(DateTime, nullable=True, comment="开始执行时间")
     finished_at = Column(DateTime, nullable=True, comment="执行完成时间")
 
