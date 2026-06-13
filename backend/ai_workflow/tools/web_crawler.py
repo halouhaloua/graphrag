@@ -1,5 +1,4 @@
-import asyncio
-import logging
+from loguru import logger
 import os
 import tempfile
 from pathlib import Path
@@ -13,7 +12,6 @@ from ai_workflow.nodes.registry import register_node
 from utils.rate_limiter import AsyncRateLimiter
 from utils.redis import RedisClient
 
-logger = logging.getLogger(__name__)
 
 
 @register_node(

@@ -27,7 +27,7 @@ const router = useRouter();
 let workflowId = route.params.id as string;
 
 const creating = ref(false);
-const showNodeSelector = ref(false);
+const showNodeSelector = ref(true);
 
 // ✅ 移除了 viewport 相关的监听和计算，完全不需要了
 
@@ -108,12 +108,12 @@ async function handleRun() {
 }
 
 function handleAddNode() {
-  showNodeSelector.value = true;
+  showNodeSelector.value = !showNodeSelector.value;
 }
 
 function onSelectNode(type: string) {
   addNodeAtCenter(type);
-  showNodeSelector.value = false;
+  // 保持面板打开，允许连续添加
 }
 </script>
 

@@ -50,7 +50,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="palette-backdrop" @click.self="emit('close')">
+  <div class="palette-sidebar">
     <div class="palette-card">
       <div class="palette-header">
         <span class="palette-title">节点</span>
@@ -60,7 +60,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="palette-search">
-        <IconifyIcon icon="lucide:search" class="palette-search-icon" />
+        <!-- <IconifyIcon icon="lucide:search" class="palette-search-icon" /> -->
         <input
           v-model="search"
           placeholder="搜索节点..."
@@ -107,19 +107,19 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* ── backdrop ── */
-.palette-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  background: rgba(0, 0, 0, 0.2);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
+/* ── sidebar 容器 ── */
+.palette-sidebar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 40;
+  pointer-events: none;
 }
 
-/* ── 浮动卡片 ── */
+/* ── 节点卡片 ── */
 .palette-card {
-  position: fixed;
+  position: absolute;
   left: 24px;
   top: 8vh;
   bottom: 8vh;
@@ -130,6 +130,7 @@ onBeforeUnmount(() => {
   border-radius: 16px;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.15);
   overflow: hidden;
+  pointer-events: auto;
   animation: paletteIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
@@ -194,7 +195,7 @@ onBeforeUnmount(() => {
 }
 .palette-search-input {
   width: 100%;
-  padding: 8px 12px 8px 32px;
+  padding: 8px 12px 8px 8px;
   font-size: 13px;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
@@ -220,19 +221,12 @@ onBeforeUnmount(() => {
   padding: 0 8px 16px;
 }
 
-/* 自定义滚动条 */
+/* 隐藏滚动条（保留滚动功能） */
+.palette-body {
+  scrollbar-width: none;
+}
 .palette-body::-webkit-scrollbar {
-  width: 4px;
-}
-.palette-body::-webkit-scrollbar-track {
-  background: transparent;
-}
-.palette-body::-webkit-scrollbar-thumb {
-  background: #e2e8f0;
-  border-radius: 4px;
-}
-.palette-body::-webkit-scrollbar-thumb:hover {
-  background: #cbd5e1;
+  display: none;
 }
 
 .palette-empty {

@@ -1,6 +1,6 @@
 import asyncio
 import json
-import logging
+from loguru import logger
 import re
 import time
 from collections import deque
@@ -15,7 +15,6 @@ from ai_workflow.workflow.model import WorkflowDef, WorkflowInstance, WorkflowNo
 from ai_workflow.nodes.base import BaseNode, NodeContext
 from ai_workflow.nodes.registry import NodeRegistry
 
-logger = logging.getLogger(__name__)
 
 _REF_PATTERN = re.compile(r"\$\{(\w+)\.(\w+)\}")
 

@@ -779,7 +779,7 @@ def _sample_by_degree(nodes: list, links: list, max_nodes: int) -> tuple[list, l
     }
     kept_nodes = [n for n in nodes if n["id"] in kept_ids]
     kept_links = [
-        l for l in links if l["source"] in kept_ids and l["target"] in kept_ids
+        link for link in links if link["source"] in kept_ids and link["target"] in kept_ids
     ]
     return kept_nodes, kept_links
 

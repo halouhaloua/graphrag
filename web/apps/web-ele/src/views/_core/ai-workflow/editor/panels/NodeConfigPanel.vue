@@ -19,7 +19,7 @@ import { getNodeMeta, NODE_TYPE_MAP } from '../nodes/index';
 
 const availableTools = computed(() => {
   return Object.values(NODE_TYPE_MAP).filter(
-    (n) => n.type && !['_start', '_end', 'chat'].includes(n.type),
+    (n) => n.type && !['_start', '_end', 'chat', 'condition'].includes(n.type),
   );
 });
 
@@ -54,6 +54,15 @@ function updateParam(key: string, value: any) {
   if (!props.selectedNode) return;
   const newParams = { ...localParams.value, [key]: value };
   emit('updateParams', props.selectedNode.id, newParams);
+}
+
+function updateJsonParam(key: string, raw: string) {
+  try {
+    const parsed = JSON.parse(raw);
+    updateParam(key, parsed);
+  } catch {
+    // ignore parse errors until input stabilizes
+  }
 }
 </script>
 
@@ -318,6 +327,142 @@ function updateParam(key: string, value: any) {
       </template>
       <template v-else-if="meta?.type === '_end'">
         <div class="cfg-empty">此节点无可配置参数</div>
+      </template>
+
+      <template v-else-if="meta?.type === 'rag_query'">
+        <div class="cfg-section">
+          <div class="cfg-section__label">知识库ID</div>
+          <ElInput
+            :model-value="localParams.kb_id"
+            size="small"
+            placeholder="请输入知识库ID"
+            @update:model-value="updateParam('kb_id', $event)"
+          />
+        </div>
+        <div class="cfg-section">
+          <div class="cfg-section__label">文件ID（可选）</div>
+          <ElInput
+            :model-value="localParams.file_id"
+            size="small"
+            placeholder="不填时自动选择有图谱的文件"
+            @update:model-value="updateParam('file_id', $event)"
+          />
+          <div class="cfg-section__hint">指定知识库中的特定文件</div>
+        </div>
+        <div class="cfg-section">
+          <div class="cfg-section__label">问题</div>
+          <ElInput
+            :model-value="localParams.question"
+            type="textarea"
+            :rows="4"
+            size="small"
+            placeholder="基于知识库提问，支持 ${node.key} 引用上游"
+            @update:model-value="updateParam('question', $event)"
+          />
+        </div>
+        <div class="cfg-section">
+          <div class="cfg-section__label-row">
+            <span>IRCoT 迭代检索</span>
+          </div>
+          <ElSelect
+            :model-value="localParams.enable_ircot ? 'true' : 'false'"
+            size="small"
+            @update:model-value="updateParam('enable_ircot', $event === 'true')"
+          >
+            <ElOption label="关闭（直接回答）" value="false" />
+            <ElOption label="开启（迭代检索+推理）" value="true" />
+          </ElSelect>
+          <div class="cfg-section__hint">开启后 LLM 可多轮检索，适用于复杂问题</div>
+        </div>
+        <div class="cfg-section">
+          <div class="cfg-section__label">检索返回数量</div>
+          <ElInputNumber
+            :model-value="localParams.top_k ?? 10"
+            :min="1"
+            :max="100"
+            size="small"
+            :style="{ width: '100%' }"
+            @update:model-value="updateParam('top_k', $event)"
+          />
+        </div>
+      </template>
+
+      <template v-else-if="meta?.type === 'db_query'">
+        <div class="cfg-section">
+          <div class="cfg-section__label">SQL 查询</div>
+          <ElInput
+            :model-value="localParams.sql"
+            type="textarea"
+            :rows="4"
+            size="small"
+            placeholder="SELECT * FROM table WHERE id = :id"
+            @update:model-value="updateParam('sql', $event)"
+          />
+          <div class="cfg-section__hint">仅支持 SELECT / WITH 等只读查询，使用 :key 传参</div>
+        </div>
+        <div class="cfg-section">
+          <div class="cfg-section__label">参数 (JSON)</div>
+          <ElInput
+            :model-value="typeof localParams.params === 'object' ? JSON.stringify(localParams.params, null, 2) : localParams.params"
+            type="textarea"
+            :rows="3"
+            size="small"
+            placeholder='{"id": 1}'
+            @update:model-value="updateJsonParam('params', $event)"
+          />
+        </div>
+        <div class="cfg-section">
+          <div class="cfg-section__label">最大行数</div>
+          <ElInputNumber
+            :model-value="localParams.max_rows ?? 100"
+            :min="1"
+            :max="1000"
+            size="small"
+            :style="{ width: '100%' }"
+            @update:model-value="updateParam('max_rows', $event)"
+          />
+        </div>
+      </template>
+
+      <template v-else-if="meta?.type === 'condition'">
+        <div class="cfg-section">
+          <div class="cfg-section__label">左值</div>
+          <ElInput
+            :model-value="localParams.left"
+            size="small"
+            placeholder='${node_id.result} 或直接输入值'
+            @update:model-value="updateParam('left', $event)"
+          />
+        </div>
+        <div class="cfg-section">
+          <div class="cfg-section__label">运算符</div>
+          <ElSelect
+            :model-value="localParams.operator || 'equals'"
+            size="small"
+            @update:model-value="updateParam('operator', $event)"
+          >
+            <ElOption label="等于 (equals)" value="equals" />
+            <ElOption label="不等于 (not_equals)" value="not_equals" />
+            <ElOption label="包含 (contains)" value="contains" />
+            <ElOption label="大于 (gt)" value="gt" />
+            <ElOption label="大于等于 (gte)" value="gte" />
+            <ElOption label="小于 (lt)" value="lt" />
+            <ElOption label="小于等于 (lte)" value="lte" />
+            <ElOption label="为空 (is_empty)" value="is_empty" />
+            <ElOption label="不为空 (is_not_empty)" value="is_not_empty" />
+            <ElOption label="开头是 (starts_with)" value="starts_with" />
+            <ElOption label="结尾是 (ends_with)" value="ends_with" />
+          </ElSelect>
+        </div>
+        <div class="cfg-section">
+          <div class="cfg-section__label">右值</div>
+          <ElInput
+            :model-value="localParams.right"
+            size="small"
+            placeholder="is_empty / is_not_empty 时可不填"
+            @update:model-value="updateParam('right', $event)"
+          />
+        </div>
       </template>
 
       <template v-else>

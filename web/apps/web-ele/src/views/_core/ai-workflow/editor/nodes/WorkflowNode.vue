@@ -35,6 +35,11 @@ const paramSummary = computed(() => {
   if (type === 'weather_forecast') {
     return p.latitude ? `(${p.latitude}, ${p.longitude})` : '';
   }
+  if (type === 'rag_query' && p.question) return truncateText(p.question, 28);
+  if (type === 'db_query' && p.sql) return truncateText(p.sql, 28);
+  if (type === 'condition') {
+    return `${p.left ?? ''} ${p.operator ?? 'equals'} ${p.right ?? ''}`;
+  }
   return '';
 });
 </script>

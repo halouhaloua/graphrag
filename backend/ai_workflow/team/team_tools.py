@@ -1,8 +1,7 @@
 """团队 Handoff / FinalAnswer 工具
 
 两个特殊的工具（handoff / final_answer）供 LLM 在多角色团队中切换角色和结束任务。
-它们被注入到每个角色的 ``Toolkit`` 中，采用标准 OpenAI function calling 格式，
-取代了旧的 XML 解析方式。
+它们被注入到每个角色的 ``Toolkit`` 中，采用标准 OpenAI function calling 格式。
 """
 
 from agentscope.message import TextBlock
