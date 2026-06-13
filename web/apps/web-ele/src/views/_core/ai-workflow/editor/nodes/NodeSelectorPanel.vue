@@ -63,7 +63,7 @@ onBeforeUnmount(() => {
         <!-- <IconifyIcon icon="lucide:search" class="palette-search-icon" /> -->
         <input
           v-model="search"
-          placeholder="搜索节点..."
+          placeholder="搜索节点名称"
           class="palette-search-input"
         />
       </div>

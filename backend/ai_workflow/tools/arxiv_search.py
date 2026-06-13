@@ -1,4 +1,4 @@
-import logging
+from loguru import logger
 import os
 import tempfile
 from typing import Any, Dict
@@ -10,7 +10,7 @@ from PyPDF2 import PdfReader
 from ai_workflow.nodes.base import BaseNode, NodeContext
 from ai_workflow.nodes.registry import register_node
 
-logger = logging.getLogger(__name__)
+
 
 
 @register_node(

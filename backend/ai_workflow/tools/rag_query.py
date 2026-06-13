@@ -7,7 +7,7 @@
 """
 
 import json
-import logging
+
 import re
 from typing import Any, Dict, Optional
 
@@ -17,7 +17,7 @@ from ai_workflow.nodes.base import BaseNode, NodeContext
 from ai_workflow.nodes.registry import register_node
 from ai_workflow.workflow.events import WorkflowEventType
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 # IRCoT 答案标记
 _ANSWER_MARKER = "So the answer is:"

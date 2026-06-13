@@ -1,6 +1,6 @@
 import asyncio
 import concurrent.futures
-import logging
+from loguru import logger
 import os
 import platform
 from functools import partial
@@ -18,7 +18,7 @@ from ai_workflow.nodes.registry import register_node
 if platform.system() == "Windows":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-logger = logging.getLogger(__name__)
+
 
 
 @register_node(

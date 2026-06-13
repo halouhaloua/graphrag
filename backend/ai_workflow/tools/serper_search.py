@@ -1,6 +1,4 @@
-import asyncio
 import json
-import logging
 import os
 from typing import Any, Dict
 
@@ -11,7 +9,7 @@ from ai_workflow.nodes.registry import register_node
 from utils.rate_limiter import AsyncRateLimiter
 from utils.redis import RedisClient
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 @register_node(

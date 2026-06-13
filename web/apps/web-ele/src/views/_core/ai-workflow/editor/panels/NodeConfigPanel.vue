@@ -16,12 +16,59 @@ import {
 } from 'element-plus';
 
 import { getNodeMeta, NODE_TYPE_MAP } from '../nodes/index';
+import type { KnowledgeBase, KnowledgeBaseFile } from '#/api/core/rag';
+import {
+  getFileListApi,
+  getKnowledgeBaseListApi,
+} from '#/api/core/rag';
 
 const availableTools = computed(() => {
   return Object.values(NODE_TYPE_MAP).filter(
     (n) => n.type && !['_start', '_end', 'chat', 'condition'].includes(n.type),
   );
 });
+
+// ── KB/File 选择器 ──
+const kbs = ref<KnowledgeBase[]>([]);
+const files = ref<KnowledgeBaseFile[]>([]);
+const loadingKbs = ref(false);
+const loadingFiles = ref(false);
+
+async function loadKbs() {
+  loadingKbs.value = true;
+  try {
+    const res = await getKnowledgeBaseListApi({ page: 1, pageSize: 200 });
+    kbs.value = res.items || [];
+  } catch {
+    kbs.value = [];
+  } finally {
+    loadingKbs.value = false;
+  }
+}
+
+async function loadFiles(kbId: string) {
+  if (!kbId) { files.value = []; return; }
+  loadingFiles.value = true;
+  try {
+    const res = await getFileListApi(kbId);
+    files.value = (res.items || []).filter((f) => f.has_graph);
+  } catch {
+    files.value = [];
+  } finally {
+    loadingFiles.value = false;
+  }
+}
+
+// 知识库选择下拉展开时加载
+function onKbSelectOpen() {
+  if (kbs.value.length === 0) loadKbs();
+}
+// 知识库变更时加载文件
+function onKbChange(kbId: string) {
+  updateParam('kb_id', kbId);
+  updateParam('file_id', '');
+  if (kbId) loadFiles(kbId);
+}
 
 const props = defineProps<{
   selectedNode: Node | null;
@@ -331,23 +378,43 @@ function updateJsonParam(key: string, raw: string) {
 
       <template v-else-if="meta?.type === 'rag_query'">
         <div class="cfg-section">
-          <div class="cfg-section__label">知识库ID</div>
-          <ElInput
+          <div class="cfg-section__label">知识库</div>
+          <ElSelect
             :model-value="localParams.kb_id"
+            placeholder="选择知识库"
             size="small"
-            placeholder="请输入知识库ID"
-            @update:model-value="updateParam('kb_id', $event)"
-          />
+            :loading="loadingKbs"
+            filterable
+            @visible-change="(v: boolean) => v && onKbSelectOpen()"
+            @update:model-value="onKbChange"
+          >
+            <ElOption
+              v-for="kb in kbs"
+              :key="kb.id"
+              :label="kb.name"
+              :value="kb.id"
+            />
+          </ElSelect>
         </div>
         <div class="cfg-section">
-          <div class="cfg-section__label">文件ID（可选）</div>
-          <ElInput
+          <div class="cfg-section__label">知识库文件</div>
+          <ElSelect
             :model-value="localParams.file_id"
+            placeholder="不选时自动选择有图谱的文件"
             size="small"
-            placeholder="不填时自动选择有图谱的文件"
-            @update:model-value="updateParam('file_id', $event)"
-          />
-          <div class="cfg-section__hint">指定知识库中的特定文件</div>
+            :loading="loadingFiles"
+            filterable
+            clearable
+            @update:model-value="updateParam('file_id', $event || '')"
+          >
+            <ElOption
+              v-for="f in files"
+              :key="f.id"
+              :label="f.filename"
+              :value="f.id"
+            />
+          </ElSelect>
+          <div class="cfg-section__hint">仅显示已构建图谱的文件</div>
         </div>
         <div class="cfg-section">
           <div class="cfg-section__label">问题</div>

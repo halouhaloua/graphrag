@@ -1,5 +1,4 @@
 import type { Edge, Node } from '@vue-flow/core';
-import { useVueFlow } from '@vue-flow/core';
 
 import { nanoid } from 'nanoid';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
@@ -111,7 +110,6 @@ function fromFlowEdge(e: Edge): WorkflowDefEdge {
 
 export function useWorkflowEditor(workflowId: string) {
   const store = useWorkflowEditorStore();
-  const { screenToFlowCoordinate } = useVueFlow();
 
   const nodes = ref<Node[]>([]);
   const edges = ref<Edge[]>([]);
@@ -316,15 +314,17 @@ export function useWorkflowEditor(workflowId: string) {
     const meta = type ? getNodeMeta(type) : null;
     if (!meta) return;
 
-    // 将屏幕坐标转换为画布坐标（自动处理 viewport 平移/缩放）
-    const flowPos = screenToFlowCoordinate({
-      x: event.clientX,
-      y: event.clientY,
-    });
+    // 从 canvas 容器计算放置位置
+    const canvas = (event.currentTarget as HTMLElement)?.closest('.workflow-editor__canvas');
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left - 100;
+    const y = event.clientY - rect.top - 50;
     const newNode: Node = {
       id: `${type}-${nanoid(6)}`,
       type: 'workflow',
-      position: { x: flowPos.x - 100, y: flowPos.y - 50 },
+      position: { x: Math.max(0, x), y: Math.max(0, y) },
       data: {
         type,
         label: meta.label,

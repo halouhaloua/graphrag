@@ -42,7 +42,7 @@ export const NODE_TYPE_MAP: Record<string, NodeTypeMeta> = {
     description: '调用大语言模型进行对话',
     inputs: 1,
     outputs: 1,
-    defaultParams: { temperature: 0.7, system_prompt: '', user_question: '${_input.message}', tools: [], max_tool_rounds: 10 },
+    defaultParams: { temperature: 0.7, system_prompt: '', user_question: '', tools: [], max_tool_rounds: 10 },
   },
   serper_search: {
     type: 'serper_search',
@@ -130,7 +130,7 @@ export const NODE_TYPE_MAP: Record<string, NodeTypeMeta> = {
     description: '基于知识图谱的RAG问答，支持IRCoT迭代检索',
     inputs: 1,
     outputs: 1,
-    defaultParams: { kb_id: '', file_id: '', question: '${_input.message}', enable_ircot: false, top_k: 10 },
+    defaultParams: { kb_id: '', file_id: '', question: '', enable_ircot: false, top_k: 10 },
   },
   db_query: {
     type: 'db_query',

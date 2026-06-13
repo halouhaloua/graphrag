@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, shallowRef } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import { VueFlow } from '@vue-flow/core';
@@ -18,6 +18,8 @@ import WorkflowToolbar from './editor/WorkflowToolbar.vue';
 import NodeConfigPanel from './editor/panels/NodeConfigPanel.vue';
 import WorkflowNode from './editor/nodes/WorkflowNode.vue';
 import NodeSelectorPanel from './editor/nodes/NodeSelectorPanel.vue';
+
+const nodeTypes = shallowRef({ workflow: WorkflowNode });
 
 defineOptions({ name: 'AiWorkflowDetail' });
 
@@ -133,7 +135,7 @@ function onSelectNode(type: string) {
         <VueFlow
           v-model:nodes="nodes"
           v-model:edges="edges"
-          :node-types="{ workflow: WorkflowNode }"
+          :node-types="nodeTypes"
           :default-edge-options="{
             type: 'smoothstep',
             animated: false,

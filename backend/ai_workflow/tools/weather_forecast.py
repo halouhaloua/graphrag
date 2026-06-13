@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 from typing import Any, Dict
 
@@ -8,7 +7,7 @@ import aiohttp
 from ai_workflow.nodes.base import BaseNode, NodeContext
 from ai_workflow.nodes.registry import register_node
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 @register_node(

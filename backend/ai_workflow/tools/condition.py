@@ -14,29 +14,29 @@ from ai_workflow.nodes.registry import register_node
 logger = logging.getLogger(__name__)
 
 _OPERATORS = {
-    "equals": lambda l, r: l == r,
-    "not_equals": lambda l, r: l != r,
-    "contains": lambda l, r: r in l if l else False,
-    "gt": lambda l, r: _to_num(l) > _to_num(r) if _is_numeric(l, r) else str(l) > str(r),
-    "gte": lambda l, r: _to_num(l) >= _to_num(r) if _is_numeric(l, r) else str(l) >= str(r),
-    "lt": lambda l, r: _to_num(l) < _to_num(r) if _is_numeric(l, r) else str(l) < str(r),
-    "lte": lambda l, r: _to_num(l) <= _to_num(r) if _is_numeric(l, r) else str(l) <= str(r),
-    "is_empty": lambda l, _: l is None or l == "" or l == [],
-    "is_not_empty": lambda l, _: l is not None and l != "" and l != [],
-    "starts_with": lambda l, r: str(l).startswith(str(r)) if l else False,
-    "ends_with": lambda l, r: str(l).endswith(str(r)) if l else False,
+    "equals": lambda left, right: left == right,
+    "not_equals": lambda left, right: left != right,
+    "contains": lambda left, right: right in left if left else False,
+    "gt": lambda left, right: _to_num(left) > _to_num(right) if _is_numeric(left, right) else str(left) > str(right),
+    "gte": lambda left, right: _to_num(left) >= _to_num(right) if _is_numeric(left, right) else str(left) >= str(right),
+    "lt": lambda left, right: _to_num(left) < _to_num(right) if _is_numeric(left, right) else str(left) < str(right),
+    "lte": lambda left, right: _to_num(left) <= _to_num(right) if _is_numeric(left, right) else str(left) <= str(right),
+    "is_empty": lambda left, _: left is None or left == "" or left == [],
+    "is_not_empty": lambda left, _: left is not None and left != "" and left != [],
+    "starts_with": lambda left, right: str(left).startswith(str(right)) if left else False,
+    "ends_with": lambda left, right: str(left).endswith(str(right)) if left else False,
 }
 
 
-def _to_num(v: Any) -> float:
+def _to_num(value: Any) -> float:
     try:
-        return float(v)
+        return float(value)
     except (ValueError, TypeError):
         return float("nan")
 
 
-def _is_numeric(l: Any, r: Any) -> bool:
-    for v in (l, r):
+def _is_numeric(left: Any, right: Any) -> bool:
+    for v in (left, right):
         if v is None or v == "":
             return False
         try:

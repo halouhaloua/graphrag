@@ -5,7 +5,7 @@
 """
 
 import json
-import logging
+from loguru import logger
 import re
 from typing import Any, Dict
 
@@ -14,7 +14,6 @@ from sqlalchemy import text
 from ai_workflow.nodes.base import BaseNode, NodeContext
 from ai_workflow.nodes.registry import register_node
 
-logger = logging.getLogger(__name__)
 
 # 安全的 SQL 开头关键字
 _SAFE_PREFIXES = re.compile(
